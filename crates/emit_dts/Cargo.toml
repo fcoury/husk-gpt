@@ -1,0 +1,8 @@
+[package]
+name = "emit_dts"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+syntax = { path = "../syntax" }
+diagnostics = { path = "../diagnostics" }
