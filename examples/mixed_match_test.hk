@@ -1,0 +1,46 @@
+// Test for mixed pattern matching and scrutinee side effects
+
+enum Status {
+    Active(string),
+    Inactive,
+}
+
+fn side_effect_counter() -> number {
+    // This should only be called once
+    console.log("Side effect!");
+    42
+}
+
+export fn test_mixed_patterns() -> string {
+    // Test with variants only - should use switch
+    let status = Status_Active("running");
+    let result1 = match status {
+        Active(msg) => "Status: " + msg,
+        Inactive => "Not running",
+    };
+    
+    // Test with mixed patterns - should use if-chain
+    let value = 10;
+    let result2 = match value {
+        5 => "Five",
+        n if n > 10 => "Greater than ten", 
+        n => "Other: " + n.toString(),
+    };
+    
+    // Test side effects - scrutinee should only be evaluated once
+    let result3 = match side_effect_counter() {
+        42 => "The answer",
+        n => "Something else: " + n.toString(),
+    };
+    
+    result1 + " | " + result2 + " | " + result3
+}
+
+export fn test_literal_match() -> string {
+    let status = "active";
+    match status {
+        "active" => "System is running",
+        "inactive" => "System is stopped", 
+        _ => "Unknown status",
+    }
+}

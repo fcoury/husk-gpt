@@ -60,7 +60,7 @@ fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn s
     
     // Parse
     let mut parser = HuskParser::new(tokens);
-    let (module, diagnostics) = parser.parse();
+    let (mut module, diagnostics) = parser.parse();
     
     // Report diagnostics
     for diagnostic in diagnostics {
@@ -90,6 +90,9 @@ fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn s
     }
     
     println!("Name resolution complete!");
+    
+    // Normalize patterns (convert unit variant identifiers to variant patterns)
+    resolver.normalize_patterns(&mut module);
     
     // TODO: Typecheck (stub)
     println!("Typechecking... (stub)");

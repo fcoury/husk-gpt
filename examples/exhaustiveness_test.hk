@@ -1,0 +1,43 @@
+// Test exhaustiveness and reachability warnings
+
+enum Result {
+    Ok(string),
+    Err(string),
+}
+
+enum Status {
+    Active(string),
+    Inactive,
+    Pending,
+}
+
+export fn test_incomplete_match() -> string {
+    let status = Status_Active("running");
+    
+    // This match is incomplete - missing Pending variant
+    match status {
+        Active(msg) => "Status: " + msg,
+        Inactive => "Not running",
+    }
+}
+
+export fn test_unreachable_patterns() -> string {
+    let value = 10;
+    
+    // This match has unreachable patterns
+    match value {
+        5 => "Five",
+        n => "Other: " + n.toString(),
+        10 => "Ten", // Unreachable - covered by previous wildcard
+    }
+}
+
+export fn test_exhaustive_match() -> string {
+    let result = Result_Ok("success");
+    
+    // This match is complete - covers all variants
+    match result {
+        Ok(msg) => "Success: " + msg,
+        Err(msg) => "Error: " + msg,
+    }
+}

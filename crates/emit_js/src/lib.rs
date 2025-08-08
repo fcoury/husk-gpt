@@ -1,6 +1,103 @@
 use syntax::ast::*;
 use syntax::ast::{ImportClause, Export, ExportItem};
 
+/// Represents how a pattern should be checked and what bindings it creates
+#[derive(Debug, Clone)]
+struct PatternCheck {
+    /// JavaScript condition to test if the pattern matches
+    test_condition: String,
+    /// Variable bindings this pattern creates
+    bindings: Vec<PatternBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PatternBinding {
+    /// Name of the variable to bind
+    name: String,
+    /// JavaScript expression to get the value
+    value_expr: String,
+}
+
+impl PatternCheck {
+    /// Convert a pattern to a PatternCheck that explicitly separates test and bind logic
+    fn from_pattern(pattern: &Pattern, scrutinee_var: &str) -> Self {
+        match pattern {
+            Pattern::Wildcard => PatternCheck {
+                test_condition: "true".to_string(),
+                bindings: vec![],
+            },
+            Pattern::Identifier(name) => {
+                // Post-normalization, identifiers are always bindings (unit variants converted to Pattern::Variant)
+                PatternCheck {
+                    test_condition: "true".to_string(),
+                    bindings: vec![PatternBinding {
+                        name: name.clone(),
+                        value_expr: scrutinee_var.to_string(),
+                    }],
+                }
+            },
+            Pattern::Literal(lit) => {
+                let literal_value = emit_literal(lit);
+                PatternCheck {
+                    test_condition: format!("{} === {}", scrutinee_var, literal_value),
+                    bindings: vec![],
+                }
+            },
+            Pattern::Variant(variant_name, patterns) => {
+                let mut bindings = Vec::new();
+                
+                // Bind variant fields
+                for (i, pattern) in patterns.iter().enumerate() {
+                    match pattern {
+                        Pattern::Identifier(name) => {
+                            bindings.push(PatternBinding {
+                                name: name.clone(),
+                                value_expr: format!("{}[{}]", scrutinee_var, i),
+                            });
+                        },
+                        Pattern::Wildcard => {
+                            // Wildcard patterns don't create bindings
+                        },
+                        _ => {
+                            // TODO: Handle nested patterns recursively
+                        }
+                    }
+                }
+                
+                PatternCheck {
+                    test_condition: format!("{}.tag === \"{}\"", scrutinee_var, variant_name),
+                    bindings,
+                }
+            },
+            Pattern::Tuple(patterns) => {
+                let mut bindings = Vec::new();
+                
+                for (i, pattern) in patterns.iter().enumerate() {
+                    match pattern {
+                        Pattern::Identifier(name) => {
+                            bindings.push(PatternBinding {
+                                name: name.clone(),
+                                value_expr: format!("{}[{}]", scrutinee_var, i),
+                            });
+                        },
+                        Pattern::Wildcard => {
+                            // Wildcard patterns don't create bindings
+                        },
+                        _ => {
+                            // TODO: Handle nested patterns recursively
+                        }
+                    }
+                }
+                
+                PatternCheck {
+                    test_condition: format!("Array.isArray({})", scrutinee_var),
+                    bindings,
+                }
+            },
+        }
+    }
+}
+
 pub fn emit(module: &Module) -> String {
     let mut output = String::new();
     
@@ -227,104 +324,97 @@ fn emit_expression(expr: &Expression) -> String {
 
 fn emit_match_expression(match_expr: &MatchExpression) -> String {
     let scrutinee = emit_expression(&match_expr.scrutinee);
+    let arms = &match_expr.arms;
     
-    let mut output = format!("(() => {{\n  switch ({}.tag) {{\n", scrutinee);
-    
-    for arm in &match_expr.arms {
+    // Choose lowering strategy based on pattern types
+    // Check if all patterns are variant patterns (including unit variants like Inactive)
+    let all_variant_patterns = arms.iter().all(|arm| {
         match &arm.pattern {
-            Pattern::Variant(variant_name, patterns) => {
-                output.push_str(&format!("    case \"{}\":\n", variant_name));
-                
-                // Handle pattern destructuring for tuple variants
-                for (i, pattern) in patterns.iter().enumerate() {
-                    match pattern {
-                        Pattern::Identifier(name) => {
-                            output.push_str(&format!("      const {} = {}[{}];\n", name, scrutinee, i));
-                        }
-                        Pattern::Wildcard => {
-                            // Wildcard patterns don't bind anything, skip
-                        }
-                        Pattern::Literal(_) => {
-                            output.push_str("      // TODO: Literal pattern matching in variants\n");
-                        }
-                        Pattern::Tuple(_) => {
-                            output.push_str("      // TODO: Nested tuple pattern destructuring\n");
-                        }
-                        Pattern::Variant(_, _) => {
-                            output.push_str("      // TODO: Nested variant pattern destructuring\n");
-                        }
-                    }
-                }
-                
-                // Handle optional guard
-                if let Some(ref guard) = arm.guard {
-                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
-                }
-                
-                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
-            }
-            Pattern::Wildcard => {
-                output.push_str("    default:\n");
-                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
-            }
+            Pattern::Variant(_, _) => true,
             Pattern::Identifier(name) => {
-                // Pattern that binds the entire scrutinee
-                output.push_str("    default:\n");
-                output.push_str(&format!("      const {} = {};\n", name, scrutinee));
-                
-                if let Some(ref guard) = arm.guard {
-                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
-                }
-                
-                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+                // Check if this identifier is actually a unit variant
+                // For now, we'll be conservative and use sequential matching
+                // TODO: Improve this by checking symbol table
+                false
             }
-            Pattern::Literal(lit) => {
-                // Literal pattern matching (for primitives)
-                let literal_value = emit_literal(lit);
-                output.push_str("    default:\n");
-                output.push_str(&format!("      if ({} === {}) {{\n", scrutinee, literal_value));
-                
-                if let Some(ref guard) = arm.guard {
-                    output.push_str(&format!("        if (!({}) ) break;\n", emit_expression(guard)));
-                }
-                
-                output.push_str(&format!("        return {};\n", emit_expression(&arm.body)));
-                output.push_str("      }\n");
-                output.push_str("      break;\n");
+            _ => false,
+        }
+    });
+    
+    if all_variant_patterns && !arms.is_empty() {
+        // Switch-based lowering for all-variant matches
+        emit_variant_switch_match(&scrutinee, arms)
+    } else {
+        // Sequential if-chain for mixed or non-variant patterns
+        emit_sequential_match(&scrutinee, arms)
+    }
+}
+
+fn emit_variant_switch_match(scrutinee: &str, arms: &[MatchArm]) -> String {
+    let mut output = format!("(() => {{\n  const _s = {};\n", scrutinee);
+    output.push_str("  switch (_s.tag) {\n");
+    
+    for arm in arms {
+        if let Pattern::Variant(variant_name, _) = &arm.pattern {
+            output.push_str(&format!("    case \"{}\":\n", variant_name));
+            
+            // Use PatternCheck abstraction for consistency
+            let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s");
+            
+            // Emit pattern bindings
+            for binding in &pattern_check.bindings {
+                output.push_str(&format!("      const {} = {};\n", binding.name, binding.value_expr));
             }
-            Pattern::Tuple(patterns) => {
-                output.push_str("    default:\n");
-                output.push_str("      // Tuple pattern destructuring\n");
-                
-                // Destructure tuple patterns
-                for (i, pattern) in patterns.iter().enumerate() {
-                    match pattern {
-                        Pattern::Identifier(name) => {
-                            output.push_str(&format!("      const {} = {}[{}];\n", name, scrutinee, i));
-                        }
-                        Pattern::Wildcard => {
-                            // Skip wildcard bindings
-                        }
-                        _ => {
-                            output.push_str("      // TODO: Nested pattern in tuple\n");
-                        }
-                    }
-                }
-                
-                if let Some(ref guard) = arm.guard {
-                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
-                }
-                
-                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            
+            // Handle optional guard
+            if let Some(ref guard) = arm.guard {
+                output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
             }
+            
+            output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
         }
     }
     
     output.push_str("    default:\n");
     output.push_str("      throw new Error('Non-exhaustive match');\n");
     output.push_str("  }\n})()");
+    
     output
 }
+
+fn emit_sequential_match(scrutinee: &str, arms: &[MatchArm]) -> String {
+    let mut output = format!("(() => {{\n  const _s = {};\n", scrutinee);
+    
+    for arm in arms {
+        // Use PatternCheck abstraction for explicit test vs bind separation
+        let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s");
+        
+        // Emit the test condition
+        output.push_str(&format!("  if ({}) {{\n", pattern_check.test_condition));
+        
+        // Emit pattern bindings
+        for binding in &pattern_check.bindings {
+            output.push_str(&format!("    const {} = {};\n", binding.name, binding.value_expr));
+        }
+        
+        // Handle optional guard - now that bindings are in scope
+        if let Some(ref guard) = arm.guard {
+            output.push_str(&format!("    if ({}) {{\n", emit_expression(guard)));
+            output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            output.push_str("    }\n");
+        } else {
+            output.push_str(&format!("    return {};\n", emit_expression(&arm.body)));
+        }
+        
+        output.push_str("  }\n");
+    }
+    
+    output.push_str("  throw new Error('Non-exhaustive match');\n");
+    output.push_str("})()");
+    
+    output
+}
+
 
 fn emit_literal(lit: &Literal) -> String {
     match lit {
@@ -372,7 +462,42 @@ fn emit_import(import: &Import) -> String {
         }
     };
     
-    format!("import {} from \"{}\";", import_clause, import.path)
+    let rewritten_path = rewrite_import_path(&import.path);
+    format!("import {} from \"{}\";", import_clause, rewritten_path)
+}
+
+fn rewrite_import_path(path: &str) -> String {
+    // If it's a relative path (./ or ../), add .js extension
+    if path.starts_with("./") || path.starts_with("../") {
+        // Check if it already has an extension
+        if path.ends_with(".hk") {
+            // Replace .hk with .js for Husk source files
+            path.replace(".hk", ".js")
+        } else if path.ends_with('/') {
+            // Directory import, leave as-is
+            path.to_string()
+        } else if path.rfind('.').map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0)) {
+            // No extension after the last slash, add .js
+            format!("{}.js", path)
+        } else {
+            // Has extension, keep as-is
+            path.to_string()
+        }
+    } else if path.starts_with('/') {
+        // Absolute paths - add .js extension if needed
+        if path.ends_with(".hk") {
+            path.replace(".hk", ".js")
+        } else if path.ends_with('/') {
+            path.to_string()
+        } else if path.rfind('.').map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0)) {
+            format!("{}.js", path)
+        } else {
+            path.to_string()
+        }
+    } else {
+        // Package imports (no ./ or ../) - leave as-is for node_modules
+        path.to_string()
+    }
 }
 
 fn emit_export(export: &Export) -> String {
@@ -454,10 +579,12 @@ fn emit_export(export: &Export) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("export {{ {} }} from \"{}\";", names, path)
+            let rewritten_path = rewrite_import_path(path);
+            format!("export {{ {} }} from \"{}\";", names, rewritten_path)
         }
         Export::All(path) => {
-            format!("export * from \"{}\";", path)
+            let rewritten_path = rewrite_import_path(path);
+            format!("export * from \"{}\";", rewritten_path)
         }
     }
 }

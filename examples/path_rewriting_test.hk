@@ -1,0 +1,6 @@
+// Test regular import path rewriting
+import { someFunction } from "./lib.hk";
+
+export fn test_import() -> string {
+    "Testing import path rewriting"
+}

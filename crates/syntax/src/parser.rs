@@ -847,6 +847,9 @@ impl Parser {
         self.consume(&Token::Equal, "Expected '=' after type name")?;
         let ty = self.parse_type()?;
 
+        // Optional semicolon
+        self.match_token(&Token::Semicolon);
+        
         let end_span = self.previous()?.span;
         let span = Span::new(start_span.file_id, start_span.start, end_span.end);
 
@@ -1063,6 +1066,9 @@ impl Parser {
             return None;
         };
         
+        // Consume optional semicolon
+        self.match_token(&Token::Semicolon);
+        
         let end_span = self.previous()?.span;
         let span = Span::new(start_span.file_id, start_span.start, end_span.end);
         
@@ -1081,6 +1087,7 @@ impl Parser {
             if let Token::String(path) = &self.peek()?.value {
                 let path = path.clone();
                 self.advance();
+                self.match_token(&Token::Semicolon); // Consume optional semicolon
                 Export::All(path)
             } else {
                 self.error("Expected string literal after 'from'");
@@ -1129,6 +1136,7 @@ impl Parser {
                 if let Token::String(path) = &self.peek()?.value {
                     let path = path.clone();
                     self.advance();
+                    self.match_token(&Token::Semicolon); // Consume optional semicolon
                     Export::NamedFrom { items, path }
                 } else {
                     self.error("Expected string literal after 'from'");
@@ -1136,6 +1144,7 @@ impl Parser {
                 }
             } else {
                 // export { ... }
+                self.match_token(&Token::Semicolon); // Consume optional semicolon
                 Export::Named(items)
             }
         } else {

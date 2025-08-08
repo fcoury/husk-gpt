@@ -273,7 +273,31 @@ fn emit_import_declaration(import: &Import) -> String {
         }
     };
     
-    format!("import {} from \"{}\";", import_clause, import.path)
+    let rewritten_path = rewrite_dts_import_path(&import.path);
+    format!("import {} from \"{}\";", import_clause, rewritten_path)
+}
+
+fn rewrite_dts_import_path(path: &str) -> String {
+    // For TypeScript .d.ts files, we don't add extensions but remove .hk
+    if path.starts_with("./") || path.starts_with("../") {
+        if path.ends_with(".hk") {
+            // Remove .hk extension for TypeScript declarations
+            path.replace(".hk", "")
+        } else {
+            // Keep as-is for other paths
+            path.to_string()
+        }
+    } else if path.starts_with('/') {
+        // Absolute paths - remove .hk if present
+        if path.ends_with(".hk") {
+            path.replace(".hk", "")
+        } else {
+            path.to_string()
+        }
+    } else {
+        // Package imports - leave as-is
+        path.to_string()
+    }
 }
 
 fn emit_export_declaration(export: &Export) -> String {
@@ -380,10 +404,12 @@ fn emit_export_declaration(export: &Export) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("export {{ {} }} from \"{}\";", names, path)
+            let rewritten_path = rewrite_dts_import_path(path);
+            format!("export {{ {} }} from \"{}\";", names, rewritten_path)
         }
         Export::All(path) => {
-            format!("export * from \"{}\";", path)
+            let rewritten_path = rewrite_dts_import_path(path);
+            format!("export * from \"{}\";", rewritten_path)
         }
     }
 }

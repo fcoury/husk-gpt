@@ -3,6 +3,26 @@ use syntax::ast::*;
 use syntax::ast::{ImportClause, Export};
 use diagnostics::{Diagnostic, ErrorCode, Span};
 
+/// Represents a constructor pattern for exhaustiveness checking
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ConstructorPattern {
+    /// Unit variant like Inactive  
+    Variant { name: String, arity: usize },
+    /// Literal pattern like 5, "hello"
+    Literal(String),
+    /// Wildcard pattern _
+    Wildcard,
+}
+
+/// Analysis result for match exhaustiveness and reachability
+#[derive(Debug)]
+struct MatchAnalysis {
+    /// Missing patterns that would make the match exhaustive
+    missing_patterns: Vec<ConstructorPattern>,
+    /// Patterns that can never be reached
+    unreachable_patterns: Vec<usize>, // indices into the arms
+}
+
 pub struct Resolver {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
@@ -335,6 +355,9 @@ impl Resolver {
                     self.resolve_expression(&arm.body, span);
                     self.pop_scope();
                 }
+                
+                // Analyze match for exhaustiveness and reachability
+                self.analyze_match(match_expr, span);
             }
             Expression::Block(block) => {
                 self.push_scope();
@@ -491,6 +514,313 @@ impl Resolver {
             span,
             &message,
         ));
+    }
+    
+    /// Check if a name refers to a unit variant (EnumVariant with 0 fields)
+    pub fn is_unit_variant(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.symbols.get(name) {
+                match &symbol.kind {
+                    SymbolKind::EnumVariant { fields, .. } => {
+                        return fields.is_empty();
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        false
+    }
+    
+    /// Normalize patterns in a module - convert identifier patterns that resolve to unit variants
+    /// into variant patterns
+    pub fn normalize_patterns(&self, module: &mut Module) {
+        for item in &mut module.items {
+            self.normalize_patterns_in_item(&mut item.value);
+        }
+    }
+    
+    fn normalize_patterns_in_item(&self, item: &mut Item) {
+        match item {
+            Item::Function(func) => {
+                if let Some(body) = &mut func.body {
+                    self.normalize_patterns_in_block(body);
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn normalize_patterns_in_block(&self, block: &mut Block) {
+        for stmt in &mut block.statements {
+            self.normalize_patterns_in_statement(&mut stmt.value);
+        }
+    }
+    
+    fn normalize_patterns_in_statement(&self, stmt: &mut Statement) {
+        match stmt {
+            Statement::Expression(expr) => {
+                self.normalize_patterns_in_expression(expr);
+            }
+            Statement::Let(let_stmt) => {
+                self.normalize_patterns_in_expression(&mut let_stmt.value);
+            }
+        }
+    }
+    
+    fn normalize_patterns_in_expression(&self, expr: &mut Expression) {
+        match expr {
+            Expression::Match(match_expr) => {
+                self.normalize_patterns_in_expression(&mut match_expr.scrutinee);
+                for arm in &mut match_expr.arms {
+                    self.normalize_pattern(&mut arm.pattern);
+                    if let Some(guard) = &mut arm.guard {
+                        self.normalize_patterns_in_expression(guard);
+                    }
+                    self.normalize_patterns_in_expression(&mut arm.body);
+                }
+            }
+            Expression::Call(call) => {
+                self.normalize_patterns_in_expression(&mut call.callee);
+                for arg in &mut call.args {
+                    self.normalize_patterns_in_expression(arg);
+                }
+            }
+            Expression::Member(member) => {
+                self.normalize_patterns_in_expression(&mut member.object);
+            }
+            Expression::Binary(binary) => {
+                self.normalize_patterns_in_expression(&mut binary.left);
+                self.normalize_patterns_in_expression(&mut binary.right);
+            }
+            Expression::Block(block) => {
+                self.normalize_patterns_in_block(block);
+            }
+            Expression::VariantCtor { args, .. } => {
+                for arg in args {
+                    self.normalize_patterns_in_expression(arg);
+                }
+            }
+            Expression::ObjectLiteral(fields) => {
+                for field in fields {
+                    self.normalize_patterns_in_expression(&mut field.value);
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn normalize_pattern(&self, pattern: &mut Pattern) {
+        match pattern {
+            Pattern::Identifier(name) => {
+                if self.is_unit_variant(name) {
+                    // Convert to unit variant pattern
+                    *pattern = Pattern::Variant(name.clone(), vec![]);
+                }
+            }
+            Pattern::Variant(_, patterns) => {
+                for pattern in patterns {
+                    self.normalize_pattern(pattern);
+                }
+            }
+            Pattern::Tuple(patterns) => {
+                for pattern in patterns {
+                    self.normalize_pattern(pattern);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Analyze match expression for exhaustiveness and reachability
+    fn analyze_match(&mut self, match_expr: &MatchExpression, span: Span) {
+        let analysis = self.check_match_exhaustiveness(&match_expr.arms, span);
+        
+        // Report missing patterns (exhaustiveness)
+        if !analysis.missing_patterns.is_empty() {
+            let missing_str = analysis.missing_patterns
+                .iter()
+                .map(|p| self.constructor_pattern_to_string(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            
+            self.error_at(span, format!(
+                "Non-exhaustive match: missing patterns [{}]", 
+                missing_str
+            ));
+        }
+        
+        // Report unreachable patterns
+        for &arm_index in &analysis.unreachable_patterns {
+            self.error_at(span, format!(
+                "Unreachable pattern at match arm {}", 
+                arm_index + 1
+            ));
+        }
+    }
+    
+    /// Check exhaustiveness and reachability of match arms
+    fn check_match_exhaustiveness(&self, arms: &[MatchArm], _span: Span) -> MatchAnalysis {
+        let mut covered_for_reachability = Vec::new(); // For reachability analysis (no guarded patterns)
+        let mut covered_for_exhaustiveness = Vec::new(); // For exhaustiveness analysis (all patterns)
+        let mut unreachable_patterns = Vec::new();
+        
+        // Collect all constructor patterns from arms
+        for (i, arm) in arms.iter().enumerate() {
+            let constructor = self.pattern_to_constructor(&arm.pattern);
+            
+            // Check if this pattern is already covered (reachability)
+            // Only count unguarded patterns as covering for reachability
+            if self.is_pattern_covered(&constructor, &covered_for_reachability) {
+                unreachable_patterns.push(i);
+            } else {
+                // Add to reachability coverage only if there's no guard
+                if arm.guard.is_none() {
+                    covered_for_reachability.push(constructor.clone());
+                }
+                
+                // Always add to exhaustiveness coverage (guards can still contribute to exhaustiveness)
+                covered_for_exhaustiveness.push(constructor);
+            }
+        }
+        
+        // Check for missing patterns (exhaustiveness) using all patterns
+        let missing_patterns = self.find_missing_patterns(&covered_for_exhaustiveness);
+        
+        MatchAnalysis {
+            missing_patterns,
+            unreachable_patterns,
+        }
+    }
+    
+    /// Convert a pattern to a constructor pattern for analysis
+    fn pattern_to_constructor(&self, pattern: &Pattern) -> ConstructorPattern {
+        match pattern {
+            Pattern::Wildcard => ConstructorPattern::Wildcard,
+            Pattern::Identifier(name) => {
+                // Check if this is a unit variant
+                if self.is_unit_variant(name) {
+                    ConstructorPattern::Variant { name: name.clone(), arity: 0 }
+                } else {
+                    // Regular binding pattern - acts like wildcard for exhaustiveness
+                    ConstructorPattern::Wildcard
+                }
+            },
+            Pattern::Variant(name, patterns) => {
+                ConstructorPattern::Variant { 
+                    name: name.clone(), 
+                    arity: patterns.len() 
+                }
+            },
+            Pattern::Literal(lit) => {
+                let lit_str = match lit {
+                    Literal::String(s) => format!("\"{}\"", s),
+                    Literal::Number(n) => n.clone(),
+                    Literal::Bool(b) => b.to_string(),
+                };
+                ConstructorPattern::Literal(lit_str)
+            },
+            Pattern::Tuple(patterns) => {
+                // For simplicity, treat tuples as variants with arity
+                ConstructorPattern::Variant { 
+                    name: "tuple".to_string(), 
+                    arity: patterns.len() 
+                }
+            },
+        }
+    }
+    
+    /// Check if a pattern is already covered by existing patterns
+    fn is_pattern_covered(&self, pattern: &ConstructorPattern, covered: &[ConstructorPattern]) -> bool {
+        for covered_pattern in covered {
+            match (pattern, covered_pattern) {
+                // Wildcard covers everything
+                (_, ConstructorPattern::Wildcard) => return true,
+                // Same constructor patterns
+                (ConstructorPattern::Variant { name: n1, arity: a1 }, 
+                 ConstructorPattern::Variant { name: n2, arity: a2 }) if n1 == n2 && a1 == a2 => return true,
+                (ConstructorPattern::Literal(l1), ConstructorPattern::Literal(l2)) if l1 == l2 => return true,
+                _ => continue,
+            }
+        }
+        false
+    }
+    
+    /// Find missing patterns to make the match exhaustive
+    fn find_missing_patterns(&self, covered: &[ConstructorPattern]) -> Vec<ConstructorPattern> {
+        // If we have a wildcard, the match is exhaustive
+        if covered.iter().any(|p| matches!(p, ConstructorPattern::Wildcard)) {
+            return Vec::new();
+        }
+        
+        let mut missing = Vec::new();
+        
+        // For now, we'll do a simple analysis:
+        // If we see variant patterns, check if all variants of that enum are covered
+        let mut enum_variants = HashMap::new();
+        
+        for pattern in covered {
+            if let ConstructorPattern::Variant { name, arity: _ } = pattern {
+                // Try to find the enum this variant belongs to
+                if let Some(enum_name) = self.find_enum_for_variant(name) {
+                    enum_variants.entry(enum_name).or_insert_with(Vec::new).push(name.clone());
+                }
+            }
+        }
+        
+        // Check if any enums have missing variants
+        for (enum_name, covered_variants) in enum_variants {
+            if let Some(all_variants) = self.get_enum_variants(&enum_name) {
+                for variant in all_variants {
+                    if !covered_variants.contains(&variant.name) {
+                        missing.push(ConstructorPattern::Variant {
+                            name: variant.name.clone(),
+                            arity: variant.fields.len(),
+                        });
+                    }
+                }
+            }
+        }
+        
+        missing
+    }
+    
+    /// Find the enum that a variant belongs to
+    fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.symbols.get(variant_name) {
+                if let SymbolKind::EnumVariant { enum_name, .. } = &symbol.kind {
+                    return Some(enum_name.clone());
+                }
+            }
+        }
+        None
+    }
+    
+    /// Get all variants of an enum
+    fn get_enum_variants(&self, enum_name: &str) -> Option<&Vec<Variant>> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.symbols.get(enum_name) {
+                if let SymbolKind::Type { kind: TypeKind::Enum(variants) } = &symbol.kind {
+                    return Some(variants);
+                }
+            }
+        }
+        None
+    }
+    
+    /// Convert constructor pattern to string for error messages
+    fn constructor_pattern_to_string(&self, pattern: &ConstructorPattern) -> String {
+        match pattern {
+            ConstructorPattern::Wildcard => "_".to_string(),
+            ConstructorPattern::Variant { name, arity } => {
+                if *arity == 0 {
+                    name.clone()
+                } else {
+                    format!("{}({})", name, (0..*arity).map(|_| "_").collect::<Vec<_>>().join(", "))
+                }
+            },
+            ConstructorPattern::Literal(lit) => lit.clone(),
+        }
     }
 }
 

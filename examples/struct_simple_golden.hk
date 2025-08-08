@@ -1,0 +1,29 @@
+// Golden test for basic struct and type alias parsing
+
+// Basic struct with mixed visibility
+pub struct User {
+    pub id: number,
+    pub name: string,
+    email: string,           // private field
+    pub age: number,
+}
+
+// Struct with complex field types  
+struct Config {
+    pub host: string,
+    port: number,
+    pub enabled: bool,
+}
+
+// Type aliases
+pub type UserId = number;
+type ConfigName = string;
+
+// Simple functions to test parsed struct types
+export fn create_user_id() -> UserId {
+    42
+}
+
+export fn get_default_name() -> string {
+    "default_user"
+}

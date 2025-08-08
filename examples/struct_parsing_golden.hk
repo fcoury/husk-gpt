@@ -1,0 +1,41 @@
+// Golden test for struct, type alias, and interface parsing
+
+// Basic struct with mixed visibility
+pub struct User {
+    pub id: number,
+    pub name: string,
+    email: string,           // private field
+    pub age: number,
+}
+
+// Struct with complex field types  
+struct Database {
+    pub connections: Vec<Connection>,
+    config: Map<string, string>,
+    pub is_active: bool,
+}
+
+// Type aliases
+pub type UserId = number;
+type DatabaseConfig = Map<string, string>;
+
+// Interface definitions  
+pub interface Drawable {
+    draw(ctx: Context) -> void,
+    get_bounds() -> Rectangle,
+}
+
+interface Repository {
+    save(item: T) -> Result<T, Error>,
+    find_by_id(id: UserId) -> Option<T>,
+    list_all() -> Vec<T>,
+}
+
+// Simple functions to test parsed struct types
+export fn create_user_id() -> UserId {
+    42
+}
+
+export fn get_default_name() -> string {
+    "default_user"
+}

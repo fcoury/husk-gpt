@@ -1,0 +1,149 @@
+// Comprehensive match pattern tests to lock in all improvements
+// Tests: pattern normalization, PatternCheck abstraction, exhaustiveness, guards, bindings
+
+enum Status {
+    Active(string),
+    Inactive,
+    Pending,
+    Retry(number, string),
+}
+
+enum Result {
+    Ok(string),
+    Err(string),
+}
+
+enum Color {
+    Red,
+    Green, 
+    Blue,
+}
+
+// Test 1: Unit variant patterns (Inactive) vs tuple variant patterns (Active(msg))
+// This tests the pattern normalization fix - Inactive should generate tag check, not binding
+export fn test_unit_vs_tuple_variants() -> string {
+    let status = Status_Active("running");
+    
+    match status {
+        Active(msg) => "Active: " + msg,     // Tuple variant - should bind msg
+        Inactive => "Not active",            // Unit variant - should check tag, not bind
+        Pending => "Waiting",                // Unit variant - should check tag, not bind  
+        Retry(count, reason) => "Retry " + count.toString() + ": " + reason,
+    }
+}
+
+// Test 2: Guards with proper variable scoping
+// This tests that pattern bindings are available before guard evaluation
+export fn test_guards_with_bindings() -> string {
+    let status = Status_Retry(3, "network error");
+    
+    match status {
+        Active(msg) if msg == "critical" => "Critical active state",
+        Active(msg) => "Active: " + msg,
+        Retry(n, reason) if n > 5 => "Too many retries: " + reason,
+        Retry(n, reason) if n > 0 => "Retrying " + n.toString() + ": " + reason, 
+        Retry(n, reason) => "No more retries: " + reason,
+        _ => "Other status",
+    }
+}
+
+// Test 3: Exhaustiveness checking - this should compile without warnings
+export fn test_exhaustive_match() -> string {
+    let color = Color_Red;
+    
+    match color {
+        Red => "Red color",
+        Green => "Green color", 
+        Blue => "Blue color",
+    }
+}
+
+// Test 4: Non-exhaustive match - this should generate exhaustiveness warning
+export fn test_non_exhaustive_match() -> string {
+    let result = Result_Ok("success");
+    
+    // Missing Err variant - should warn about non-exhaustive match
+    match result {
+        Ok(msg) => "Success: " + msg,
+        // Err case missing!
+    }
+}
+
+// Test 5: Unreachable patterns - this should generate reachability warnings  
+export fn test_unreachable_patterns() -> string {
+    let status = Status_Active("test");
+    
+    match status {
+        Active(msg) => "Active: " + msg,
+        _ => "Catch all",                    // Wildcard covers everything
+        Inactive => "Unreachable!",         // Should warn: unreachable after wildcard
+        Pending => "Also unreachable!",     // Should warn: unreachable after wildcard
+    }
+}
+
+// Test 6: Complex nested patterns with guards
+export fn test_complex_patterns() -> string {
+    let status = Status_Retry(2, "timeout");
+    
+    match status {
+        Active(msg) if msg.length > 10 => "Long active message",
+        Active(msg) if msg == "urgent" => "Urgent active",
+        Active(msg) => "Active: " + msg,
+        Retry(1, reason) => "First retry: " + reason,
+        Retry(n, reason) if n < 5 => "Retry " + n.toString() + ": " + reason,
+        Retry(n, reason) => "Final retry " + n.toString() + ": " + reason,
+        Inactive => "Inactive state",
+        Pending => "Pending state",
+    }
+}
+
+// Test 7: Wildcard and literal patterns
+export fn test_wildcard_and_literals() -> string {
+    let value = 42;
+    
+    match value {
+        0 => "Zero",
+        1 => "One", 
+        42 => "Answer to everything",
+        n if n > 100 => "Large number: " + n.toString(),
+        n if n < 0 => "Negative: " + n.toString(),
+        _ => "Some other number",
+    }
+}
+
+// Test 8: Pattern bindings without guards
+export fn test_pattern_bindings() -> string {
+    let status = Status_Active("important");
+    
+    match status {
+        Active(message) => "Got message: " + message,
+        Retry(attempts, error_msg) => "Retry attempt " + attempts.toString() + " failed: " + error_msg,
+        _ => "Some other status",
+    }
+}
+
+// Test 9: Sequential match generation (our current strategy)
+// This ensures the sequential IIFE pattern works correctly
+export fn test_sequential_match_generation() -> string {
+    let status = Status_Pending;
+    
+    // This should generate:
+    // (() => {
+    //   const _s = status;
+    //   if (_s.tag === "Active") {
+    //     const msg = _s[0];
+    //     return "Active: " + msg;
+    //   }
+    //   if (_s.tag === "Pending") {
+    //     return "Pending state";
+    //   }
+    //   // ... etc
+    // })()
+    
+    match status {
+        Active(msg) => "Active: " + msg,
+        Pending => "Pending state", 
+        Inactive => "Inactive state",
+        Retry(n, reason) => "Retry: " + reason,
+    }
+}

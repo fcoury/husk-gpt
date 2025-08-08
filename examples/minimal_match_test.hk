@@ -1,0 +1,28 @@
+// Minimal match pattern tests focusing on core functionality
+enum Status {
+    Active(string),
+    Inactive,
+    Pending,
+}
+
+// Test 1: Unit variant vs tuple variant patterns (the main fix)
+export fn test_core_functionality() -> string {
+    let status = Status_Active("test");
+    
+    match status {
+        Active(msg) => "Active: " + msg,    // Tuple variant - should bind msg
+        Inactive => "Not active",           // Unit variant - should check tag
+        Pending => "Waiting",               // Unit variant - should check tag
+    }
+}
+
+// Test 2: Guards with bindings
+export fn test_guards() -> string {
+    let status = Status_Active("urgent");
+    
+    match status {
+        Active(msg) if msg == "urgent" => "Urgent!",
+        Active(msg) => "Normal active: " + msg,
+        _ => "Other",
+    }
+}

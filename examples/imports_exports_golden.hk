@@ -1,0 +1,31 @@
+// Golden test for ESM imports/exports and path rewriting
+
+// Named imports - should add .js extension in JS, remove .hk in .d.ts
+import { helper, calculate } from "./utils";
+import { Point, distance } from "./geometry.hk";
+
+// Namespace import - should add .js extension
+import * as math from "./math";
+
+// Default import - package import should remain unchanged
+import express from "express";
+
+// Mixed import (default + named) - relative path should get .js  
+import React, { useState, useEffect } from "./react-shim";
+
+// Re-export syntax not yet supported, using regular exports
+
+// Named export of local functions
+export fn add(a: number, b: number) -> number {
+    a + b
+}
+
+export fn multiply(a: number, b: number) -> number {
+    a * b  
+}
+
+// Default export - should preserve "default" keyword in .d.ts
+export default fn main() -> string {
+    let p = Point(1.0, 2.0);
+    "ESM golden test complete"
+}

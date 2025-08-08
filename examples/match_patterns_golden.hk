@@ -1,0 +1,46 @@
+// Golden test for match patterns, guards, and variant resolution
+
+enum Result {
+    Ok(string),
+    Err(string),
+}
+
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64, f64),
+    Point,
+}
+
+export fn test_match_patterns(result: Result, shape: Shape) -> string {
+    // Test variant patterns with guards
+    let result_msg = match result {
+        Ok(value) if value.length > 0 => "Success with value",
+        Ok(value) => "Empty success",
+        Err(error) if error == "timeout" => "Timeout error", 
+        Err(e) => "Other error",
+    };
+    
+    // Test wildcard and complex patterns  
+    let shape_info = match shape {
+        Circle(r) if r > 10.0 => "Large circle",
+        Circle(r) => "Small circle",
+        Rectangle(w, h) if w == h => "Square",
+        Rectangle(w, h) => "Rectangle", 
+        Triangle(a, b, c) if a + b > c => "Valid triangle",
+        Triangle(a, b, c) => "Invalid triangle",
+        Point => "Just a point",
+        _ => "Unknown shape",
+    };
+    
+    "result and shape info"
+}
+
+// Test bare variant patterns (should resolve without enum prefix)
+export fn create_ok_result() -> Result {
+    Ok("test")
+}
+
+export fn create_err_result() -> Result {
+    Err("failed") 
+}

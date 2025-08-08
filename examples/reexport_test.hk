@@ -1,0 +1,14 @@
+// Test re-export path rewriting
+
+// Re-export specific items from a Husk module
+export { Status, Result } from "./utils.hk";
+
+// Re-export all from a Husk module
+export * from "./helpers.hk";
+
+// Regular import (should already work)
+import { someFunction } from "./lib.hk";
+
+export fn test_reexport() -> string {
+    someFunction()
+}

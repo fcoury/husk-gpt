@@ -1,0 +1,18 @@
+// Test proper exhaustive match
+
+enum Status {
+    Active(string),
+    Inactive,
+    Pending,
+}
+
+export fn test_exhaustive_match() -> string {
+    let status = Status_Active("running");
+    
+    // This match is complete - covers all variants
+    match status {
+        Active(msg) => "Status: " + msg,
+        Inactive => "Not running", 
+        Pending => "Waiting",
+    }
+}
