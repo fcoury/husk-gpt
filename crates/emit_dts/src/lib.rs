@@ -278,7 +278,7 @@ fn emit_import_declaration(import: &Import) -> String {
 
 fn emit_export_declaration(export: &Export) -> String {
     match export {
-        Export::Item(item) | Export::Default(item) => {
+        Export::Item(item) => {
             match &item.value {
         Item::Function(func) => {
             let params = func.params
@@ -330,6 +330,27 @@ fn emit_export_declaration(export: &Export) -> String {
         }
                 _ => {
                     format!("// TODO: Export declaration for {:?}", item.value)
+                }
+            }
+        }
+        Export::Default(item) => {
+            match &item.value {
+                Item::Function(func) => {
+                    let params = func.params
+                        .iter()
+                        .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    
+                    let return_type = func.return_type
+                        .as_ref()
+                        .map(emit_type)
+                        .unwrap_or_else(|| "void".to_string());
+                    
+                    format!("export default function {}({}): {};", func.name, params, return_type)
+                }
+                _ => {
+                    format!("// TODO: Default export declaration for {:?}", item.value)
                 }
             }
         }

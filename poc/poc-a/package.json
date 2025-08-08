@@ -1,8 +1,0 @@
-{
-  "name": "husk-ts-host",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "typescript": "^5.5.4"
-  }
-}

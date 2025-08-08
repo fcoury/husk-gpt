@@ -1,0 +1,21 @@
+enum Result {
+    Ok(string),
+    Error(string)
+}
+
+export default fn processResult(result: Result) -> string {
+    match result {
+        Ok(value) if value.length > 0 => value,
+        Ok(_) => "empty success",
+        Error(msg) => "failed: " + msg,
+        _ => "unknown"
+    }
+}
+
+export fn testPattern(x: number) -> string {
+    match x {
+        0 => "zero",
+        1 if x > 0 => "positive one", 
+        _ => "other"
+    }
+}

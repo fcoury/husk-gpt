@@ -235,27 +235,93 @@ fn emit_match_expression(match_expr: &MatchExpression) -> String {
             Pattern::Variant(variant_name, patterns) => {
                 output.push_str(&format!("    case \"{}\":\n", variant_name));
                 
-                // Handle basic pattern destructuring for tuple variants
+                // Handle pattern destructuring for tuple variants
                 for (i, pattern) in patterns.iter().enumerate() {
                     match pattern {
                         Pattern::Identifier(name) => {
                             output.push_str(&format!("      const {} = {}[{}];\n", name, scrutinee, i));
                         }
-                        _ => {
-                            output.push_str("      // TODO: Complex pattern destructuring\n");
+                        Pattern::Wildcard => {
+                            // Wildcard patterns don't bind anything, skip
+                        }
+                        Pattern::Literal(_) => {
+                            output.push_str("      // TODO: Literal pattern matching in variants\n");
+                        }
+                        Pattern::Tuple(_) => {
+                            output.push_str("      // TODO: Nested tuple pattern destructuring\n");
+                        }
+                        Pattern::Variant(_, _) => {
+                            output.push_str("      // TODO: Nested variant pattern destructuring\n");
                         }
                     }
                 }
                 
+                // Handle optional guard
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
+                }
+                
                 output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
             }
-            _ => {
+            Pattern::Wildcard => {
                 output.push_str("    default:\n");
+                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            }
+            Pattern::Identifier(name) => {
+                // Pattern that binds the entire scrutinee
+                output.push_str("    default:\n");
+                output.push_str(&format!("      const {} = {};\n", name, scrutinee));
+                
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
+                }
+                
+                output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            }
+            Pattern::Literal(lit) => {
+                // Literal pattern matching (for primitives)
+                let literal_value = emit_literal(lit);
+                output.push_str("    default:\n");
+                output.push_str(&format!("      if ({} === {}) {{\n", scrutinee, literal_value));
+                
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!("        if (!({}) ) break;\n", emit_expression(guard)));
+                }
+                
+                output.push_str(&format!("        return {};\n", emit_expression(&arm.body)));
+                output.push_str("      }\n");
+                output.push_str("      break;\n");
+            }
+            Pattern::Tuple(patterns) => {
+                output.push_str("    default:\n");
+                output.push_str("      // Tuple pattern destructuring\n");
+                
+                // Destructure tuple patterns
+                for (i, pattern) in patterns.iter().enumerate() {
+                    match pattern {
+                        Pattern::Identifier(name) => {
+                            output.push_str(&format!("      const {} = {}[{}];\n", name, scrutinee, i));
+                        }
+                        Pattern::Wildcard => {
+                            // Skip wildcard bindings
+                        }
+                        _ => {
+                            output.push_str("      // TODO: Nested pattern in tuple\n");
+                        }
+                    }
+                }
+                
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
+                }
+                
                 output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
             }
         }
     }
     
+    output.push_str("    default:\n");
+    output.push_str("      throw new Error('Non-exhaustive match');\n");
     output.push_str("  }\n})()");
     output
 }

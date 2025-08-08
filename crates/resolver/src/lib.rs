@@ -152,6 +152,25 @@ impl Resolver {
                         span,
                     };
                     self.declare_symbol(variant_symbol);
+                    
+                    // Also declare bare variant name for pattern matching
+                    // Check for collision first
+                    if self.lookup_symbol(&variant.name).is_some() {
+                        self.error_at(span, format!(
+                            "Variant name '{}' conflicts with existing symbol. Consider using qualified patterns.",
+                            variant.name
+                        ));
+                    } else {
+                        let bare_variant_symbol = Symbol {
+                            name: variant.name.clone(),
+                            kind: SymbolKind::EnumVariant {
+                                enum_name: enm.name.clone(),
+                                fields: variant.fields.clone(),
+                            },
+                            span,
+                        };
+                        self.declare_symbol(bare_variant_symbol);
+                    }
                 }
             }
             Item::Import(import) => {

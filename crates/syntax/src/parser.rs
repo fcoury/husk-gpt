@@ -137,11 +137,16 @@ impl Parser {
         
         let mut variants = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(&Token::RightBrace) || self.is_at_end() {
+                break;
+            }
+            
             if let Some(variant) = self.parse_variant() {
                 variants.push(variant);
-                if !self.match_token(&Token::Comma) {
-                    break;
-                }
+                // Handle trailing comma or newline
+                self.match_token(&Token::Comma);
+                self.skip_newlines();
             } else {
                 break;
             }
@@ -760,19 +765,182 @@ impl Parser {
     }
 
     // Stub implementations for other item types
-    fn parse_struct(&mut self, _vis: Visibility, _start_span: Span) -> Option<Spanned<Item>> {
-        self.error("Struct parsing not implemented yet");
-        None
+    fn parse_struct(&mut self, vis: Visibility, start_span: Span) -> Option<Spanned<Item>> {
+        self.consume(&Token::Struct, "Expected 'struct'")?;
+        
+        let name = if let Token::Ident(name) = &self.peek()?.value {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            self.error("Expected struct name");
+            return None;
+        };
+
+        self.consume(&Token::LeftBrace, "Expected '{'")?;
+        
+        let mut fields = Vec::new();
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(&Token::RightBrace) || self.is_at_end() {
+                break;
+            }
+            
+            // Parse field visibility
+            let field_vis = if self.match_token(&Token::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+            
+            // Parse field name
+            let field_name = if let Token::Ident(name) = &self.peek()?.value {
+                let name = name.clone();
+                self.advance();
+                name
+            } else {
+                self.error("Expected field name");
+                break;
+            };
+            
+            self.consume(&Token::Colon, "Expected ':' after field name")?;
+            let field_type = self.parse_type()?;
+            
+            fields.push(Field {
+                vis: field_vis,
+                name: field_name,
+                ty: field_type,
+            });
+            
+            // Handle trailing comma or newline
+            self.match_token(&Token::Comma);
+            self.skip_newlines();
+        }
+        
+        self.consume(&Token::RightBrace, "Expected '}'")?;
+
+        let end_span = self.previous()?.span;
+        let span = Span::new(start_span.file_id, start_span.start, end_span.end);
+
+        Some(Spanned::new(
+            Item::Struct(Struct {
+                vis,
+                name,
+                fields,
+            }),
+            span
+        ))
     }
 
-    fn parse_type_alias(&mut self, _vis: Visibility, _start_span: Span) -> Option<Spanned<Item>> {
-        self.error("Type alias parsing not implemented yet");
-        None
+    fn parse_type_alias(&mut self, vis: Visibility, start_span: Span) -> Option<Spanned<Item>> {
+        self.consume(&Token::Type, "Expected 'type'")?;
+        
+        let name = if let Token::Ident(name) = &self.peek()?.value {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            self.error("Expected type alias name");
+            return None;
+        };
+
+        self.consume(&Token::Equal, "Expected '=' after type name")?;
+        let ty = self.parse_type()?;
+
+        let end_span = self.previous()?.span;
+        let span = Span::new(start_span.file_id, start_span.start, end_span.end);
+
+        Some(Spanned::new(
+            Item::TypeAlias(TypeAlias {
+                vis,
+                name,
+                ty,
+            }),
+            span
+        ))
     }
 
-    fn parse_interface(&mut self, _vis: Visibility, _start_span: Span) -> Option<Spanned<Item>> {
-        self.error("Interface parsing not implemented yet");
-        None
+    fn parse_interface(&mut self, vis: Visibility, start_span: Span) -> Option<Spanned<Item>> {
+        self.consume(&Token::Interface, "Expected 'interface'")?;
+        
+        let name = if let Token::Ident(name) = &self.peek()?.value {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            self.error("Expected interface name");
+            return None;
+        };
+
+        self.consume(&Token::LeftBrace, "Expected '{'")?;
+        
+        let mut methods = Vec::new();
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            self.skip_newlines();
+            if self.check(&Token::RightBrace) || self.is_at_end() {
+                break;
+            }
+            
+            // Parse method signature
+            let method_name = if let Token::Ident(name) = &self.peek()?.value {
+                let name = name.clone();
+                self.advance();
+                name
+            } else {
+                self.error("Expected method name");
+                break;
+            };
+            
+            self.consume(&Token::LeftParen, "Expected '(' after method name")?;
+            
+            let mut params = Vec::new();
+            if !self.check(&Token::RightParen) {
+                loop {
+                    if let Some(param) = self.parse_parameter() {
+                        params.push(param);
+                    } else {
+                        break;
+                    }
+                    
+                    if !self.match_token(&Token::Comma) {
+                        break;
+                    }
+                }
+            }
+            
+            self.consume(&Token::RightParen, "Expected ')'")?;
+
+            let return_type = if self.match_token(&Token::Arrow) {
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            
+            methods.push(Function {
+                vis: Visibility::Public, // Interface methods are always public
+                name: method_name,
+                params,
+                return_type,
+                body: None, // Interface methods don't have bodies
+            });
+            
+            // Optional comma or semicolon
+            self.match_token(&Token::Comma) || self.match_token(&Token::Semicolon);
+        }
+        
+        self.consume(&Token::RightBrace, "Expected '}'")?;
+
+        let end_span = self.previous()?.span;
+        let span = Span::new(start_span.file_id, start_span.start, end_span.end);
+
+        Some(Spanned::new(
+            Item::Interface(Interface {
+                vis,
+                name,
+                methods,
+            }),
+            span
+        ))
     }
 
     fn parse_extern_mod(&mut self, _start_span: Span) -> Option<Spanned<Item>> {

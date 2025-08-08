@@ -1,0 +1,10 @@
+pub struct Point {
+    pub x: number,
+    pub y: number
+}
+
+export fn distance(p1: Point, p2: Point) -> number {
+    let dx = p1.x - p2.x;
+    let dy = p1.y - p2.y;
+    (dx * dx + dy * dy) // sqrt would be nice but we don't have it yet
+}
