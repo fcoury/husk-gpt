@@ -1,0 +1,15 @@
+[package]
+name = "huskc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+diagnostics = { path = "../diagnostics" }
+syntax = { path = "../syntax" }
+types = { path = "../types" }
+emit_js = { path = "../emit_js" }
+emit_dts = { path = "../emit_dts" }
+interop = { path = "../interop" }
+corelib = { path = "../corelib" }
+
