@@ -1,0 +1,9 @@
+// Module B: imports and matches on unit variant from A
+import { Status } from "./cross_module_a.hk";
+
+export fn f(s: Status) -> number {
+  match s {
+    Inactive => 0,
+    _ => 1,
+  }
+}

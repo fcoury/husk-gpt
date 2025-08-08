@@ -1,5 +1,8 @@
+#![allow(clippy::uninlined_format_args, clippy::unnecessary_map_or)]
+
+use std::collections::HashSet;
 use syntax::ast::*;
-use syntax::ast::{ImportClause, Export, ExportItem};
+use syntax::ast::{Export, ImportClause};
 
 /// Represents how a pattern should be checked and what bindings it creates
 #[derive(Debug, Clone)]
@@ -20,99 +23,151 @@ struct PatternBinding {
 
 impl PatternCheck {
     /// Convert a pattern to a PatternCheck that explicitly separates test and bind logic
-    fn from_pattern(pattern: &Pattern, scrutinee_var: &str) -> Self {
+    /// known_variants: set of unit/tuple variant names to disambiguate identifiers
+    fn from_pattern(
+        pattern: &Pattern,
+        scrutinee_var: &str,
+        known_variants: &HashSet<String>,
+    ) -> Self {
         match pattern {
             Pattern::Wildcard => PatternCheck {
                 test_condition: "true".to_string(),
                 bindings: vec![],
             },
             Pattern::Identifier(name) => {
-                // Post-normalization, identifiers are always bindings (unit variants converted to Pattern::Variant)
-                PatternCheck {
-                    test_condition: "true".to_string(),
-                    bindings: vec![PatternBinding {
-                        name: name.clone(),
-                        value_expr: scrutinee_var.to_string(),
-                    }],
+                // If normalization missed a unit variant, treat identifier equal to a known variant as a tag test
+                if known_variants.contains(name) {
+                    PatternCheck {
+                        test_condition: format!("{}.tag === \"{}\"", scrutinee_var, name),
+                        bindings: vec![],
+                    }
+                } else {
+                    PatternCheck {
+                        test_condition: "true".to_string(),
+                        bindings: vec![PatternBinding {
+                            name: name.clone(),
+                            value_expr: scrutinee_var.to_string(),
+                        }],
+                    }
                 }
-            },
+            }
             Pattern::Literal(lit) => {
                 let literal_value = emit_literal(lit);
                 PatternCheck {
                     test_condition: format!("{} === {}", scrutinee_var, literal_value),
                     bindings: vec![],
                 }
-            },
+            }
             Pattern::Variant(variant_name, patterns) => {
+                let mut test_conditions =
+                    vec![format!("{}.tag === \"{}\"", scrutinee_var, variant_name)];
                 let mut bindings = Vec::new();
-                
-                // Bind variant fields
-                for (i, pattern) in patterns.iter().enumerate() {
-                    match pattern {
-                        Pattern::Identifier(name) => {
-                            bindings.push(PatternBinding {
-                                name: name.clone(),
-                                value_expr: format!("{}[{}]", scrutinee_var, i),
-                            });
-                        },
-                        Pattern::Wildcard => {
-                            // Wildcard patterns don't create bindings
-                        },
-                        _ => {
-                            // TODO: Handle nested patterns recursively
-                        }
-                    }
+
+                // Add arity check for non-empty variant patterns
+                if !patterns.is_empty() {
+                    // For variants, we expect properties 0, 1, 2... to exist
+                    // This is a basic arity check - could be more sophisticated
+                    test_conditions.push(format!(
+                        "typeof {}[{}] !== 'undefined'",
+                        scrutinee_var,
+                        patterns.len() - 1
+                    ));
                 }
-                
+
+                // Handle nested patterns recursively
+                for (i, pattern) in patterns.iter().enumerate() {
+                    let field_expr = format!("{}[{}]", scrutinee_var, i);
+                    let nested_check =
+                        PatternCheck::from_pattern(pattern, &field_expr, known_variants);
+
+                    // Combine test conditions with &&
+                    if nested_check.test_condition != "true" {
+                        test_conditions.push(nested_check.test_condition);
+                    }
+
+                    // Add all bindings from nested patterns
+                    bindings.extend(nested_check.bindings);
+                }
+
                 PatternCheck {
-                    test_condition: format!("{}.tag === \"{}\"", scrutinee_var, variant_name),
+                    test_condition: test_conditions.join(" && "),
                     bindings,
                 }
-            },
+            }
             Pattern::Tuple(patterns) => {
+                let mut test_conditions = Vec::new();
                 let mut bindings = Vec::new();
-                
-                for (i, pattern) in patterns.iter().enumerate() {
-                    match pattern {
-                        Pattern::Identifier(name) => {
-                            bindings.push(PatternBinding {
-                                name: name.clone(),
-                                value_expr: format!("{}[{}]", scrutinee_var, i),
-                            });
-                        },
-                        Pattern::Wildcard => {
-                            // Wildcard patterns don't create bindings
-                        },
-                        _ => {
-                            // TODO: Handle nested patterns recursively
-                        }
-                    }
+
+                // Test that it's an object (not an array) and has the expected arity
+                test_conditions.push(format!(
+                    "typeof {} === 'object' && {} !== null && !Array.isArray({})",
+                    scrutinee_var, scrutinee_var, scrutinee_var
+                ));
+
+                // Check that the highest index field exists (basic arity check)
+                if !patterns.is_empty() {
+                    test_conditions.push(format!(
+                        "typeof {}[{}] !== 'undefined'",
+                        scrutinee_var,
+                        patterns.len() - 1
+                    ));
                 }
-                
+
+                // Handle nested patterns recursively
+                for (i, pattern) in patterns.iter().enumerate() {
+                    let field_expr = format!("{}[{}]", scrutinee_var, i);
+                    let nested_check =
+                        PatternCheck::from_pattern(pattern, &field_expr, known_variants);
+
+                    // Combine test conditions with &&
+                    if nested_check.test_condition != "true" {
+                        test_conditions.push(nested_check.test_condition);
+                    }
+
+                    // Add all bindings from nested patterns
+                    bindings.extend(nested_check.bindings);
+                }
+
                 PatternCheck {
-                    test_condition: format!("Array.isArray({})", scrutinee_var),
+                    test_condition: if test_conditions.is_empty() {
+                        "true".to_string()
+                    } else {
+                        test_conditions.join(" && ")
+                    },
                     bindings,
                 }
-            },
+            }
         }
     }
 }
 
-pub fn emit(module: &Module) -> String {
+pub fn emit_with_known_variants(module: &Module, known_variants: &HashSet<String>) -> String {
     let mut output = String::new();
-    
+
     for item in &module.items {
         match &item.value {
             Item::Function(func) => {
-                output.push_str(&emit_function(func));
+                output.push_str(&emit_function(func, known_variants));
                 output.push('\n');
             }
             Item::Enum(enm) => {
-                output.push_str(&emit_enum(enm));
+                output.push_str(&emit_enum_definition(enm));
+
+                // Add exports for all enum items
+                let exports = get_enum_exports(enm);
+                if !exports.is_empty() {
+                    output.push_str(&format!("export {{ {} }};\n", exports.join(", ")));
+                }
                 output.push('\n');
             }
             Item::Struct(strct) => {
-                output.push_str(&emit_struct(strct));
+                output.push_str(&emit_struct_definition(strct));
+
+                // Add exports for public structs
+                let exports = get_struct_exports(strct);
+                if !exports.is_empty() {
+                    output.push_str(&format!("export {{ {} }};\n", exports.join(", ")));
+                }
                 output.push('\n');
             }
             Item::Import(import) => {
@@ -120,7 +175,7 @@ pub fn emit(module: &Module) -> String {
                 output.push('\n');
             }
             Item::Export(export) => {
-                output.push_str(&emit_export(export));
+                output.push_str(&emit_export(export, known_variants));
                 output.push('\n');
             }
             _ => {
@@ -129,61 +184,82 @@ pub fn emit(module: &Module) -> String {
             }
         }
     }
-    
+
     output
 }
 
-fn emit_function(func: &Function) -> String {
+// Backwards-compatible helper for tests or callers without resolver info
+pub fn emit(module: &Module) -> String {
+    let known_variants = collect_known_variant_names(module);
+    emit_with_known_variants(module, &known_variants)
+}
+
+fn collect_known_variant_names(module: &Module) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for item in &module.items {
+        if let Item::Enum(enm) = &item.value {
+            for variant in &enm.variants {
+                set.insert(variant.name.clone());
+            }
+        }
+    }
+    set
+}
+
+fn emit_function(func: &Function, known_variants: &HashSet<String>) -> String {
     let vis = match func.vis {
         Visibility::Public => "export ",
         Visibility::Private => "",
     };
-    
-    let params = func.params
+
+    let params = func
+        .params
         .iter()
         .map(|p| p.name.clone())
         .collect::<Vec<_>>()
         .join(", ");
-    
+
     let body = if let Some(ref body) = func.body {
-        emit_block(body)
+        emit_block(body, known_variants)
     } else {
         "{ /* external function */ }".to_string()
     };
-    
+
     format!("{}function {}({}) {}", vis, func.name, params, body)
 }
 
-fn emit_enum(enm: &Enum) -> String {
+fn emit_enum_definition(enm: &Enum) -> String {
     let mut output = String::new();
-    
+
     // Generate factory functions for each variant
     for variant in &enm.variants {
         if variant.fields.is_empty() {
             // Unit variant
             output.push_str(&format!(
-                "export const {} = {{ tag: \"{}\" }};\n",
+                "const {} = {{ tag: \"{}\" }};\n",
                 format!("{}_{}", enm.name, variant.name),
                 variant.name
             ));
         } else {
             // Tuple variant (simplified - all variants with fields are treated as tuples)
-            let params = variant.fields
+            let params = variant
+                .fields
                 .iter()
                 .enumerate()
                 .map(|(i, _)| format!("arg{}", i))
                 .collect::<Vec<_>>()
                 .join(", ");
-            
-            let fields = variant.fields
+
+            let fields = variant
+                .fields
                 .iter()
                 .enumerate()
                 .map(|(i, _)| format!("{}: arg{}", i, i))
                 .collect::<Vec<_>>()
                 .join(", ");
-                
+
             output.push_str(&format!(
-                "export function {}({}) {{ return {{ tag: \"{}\", {} }}; }}\n",
+                "function {}({}) {{ return {{ tag: \"{}\", {} }}; }}\n",
                 format!("{}_{}", enm.name, variant.name),
                 params,
                 variant.name,
@@ -191,10 +267,10 @@ fn emit_enum(enm: &Enum) -> String {
             ));
         }
     }
-    
+
     // Generate namespace object
     output.push_str(&format!(
-        "export const {} = {{ {} }};\n",
+        "const {} = {{ {} }};\n",
         enm.name,
         enm.variants
             .iter()
@@ -202,98 +278,132 @@ fn emit_enum(enm: &Enum) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    
+
     output
 }
 
-fn emit_struct(strct: &Struct) -> String {
-    let vis = match strct.vis {
-        Visibility::Public => "export ",
-        Visibility::Private => "",
-    };
-    
+fn get_enum_exports(enm: &Enum) -> Vec<String> {
+    let mut exports = Vec::new();
+
+    // Add variant constructors/values
+    for variant in &enm.variants {
+        exports.push(format!("{}_{}", enm.name, variant.name));
+    }
+
+    // Add namespace object
+    exports.push(enm.name.clone());
+
+    exports
+}
+
+fn emit_struct_definition(strct: &Struct) -> String {
     // Generate constructor function that returns plain object
-    let field_params = strct.fields
+    let field_params = strct
+        .fields
         .iter()
         .filter(|f| matches!(f.vis, Visibility::Public) || strct.vis == Visibility::Private)
         .map(|f| f.name.clone())
         .collect::<Vec<_>>()
         .join(", ");
-    
-    let field_returns = strct.fields
+
+    let field_returns = strct
+        .fields
         .iter()
         .filter(|f| matches!(f.vis, Visibility::Public) || strct.vis == Visibility::Private)
         .map(|f| f.name.clone())
         .collect::<Vec<_>>()
         .join(", ");
-    
+
     format!(
-        "{}function {}({{ {} }}) {{ return {{ {} }}; }}",
-        vis, strct.name, field_params, field_returns
+        "function {}({{ {} }}) {{ return {{ {} }}; }}",
+        strct.name, field_params, field_returns
     )
 }
 
-fn emit_block(block: &Block) -> String {
+fn get_struct_exports(strct: &Struct) -> Vec<String> {
+    if matches!(strct.vis, Visibility::Public) {
+        vec![strct.name.clone()]
+    } else {
+        vec![]
+    }
+}
+
+fn emit_block(block: &Block, known_variants: &HashSet<String>) -> String {
     let mut output = String::from(" {\n");
-    
+
     for (i, stmt) in block.statements.iter().enumerate() {
         output.push_str("  ");
         let is_last = i == block.statements.len() - 1;
-        output.push_str(&emit_statement(&stmt.value, is_last));
+        output.push_str(&emit_statement(&stmt.value, is_last, known_variants));
         output.push('\n');
     }
-    
+
     output.push('}');
     output
 }
 
-fn emit_statement(stmt: &Statement, is_last: bool) -> String {
+fn emit_statement(stmt: &Statement, is_last: bool, known_variants: &HashSet<String>) -> String {
     match stmt {
         Statement::Expression(expr) => {
             if is_last {
-                format!("return {};", emit_expression(expr))
+                format!("return {};", emit_expression(expr, known_variants))
             } else {
-                format!("{};", emit_expression(expr))
+                format!("{};", emit_expression(expr, known_variants))
             }
         }
         Statement::Let(let_stmt) => {
             let keyword = if let_stmt.mutable { "let" } else { "const" };
-            format!("{} {} = {};", keyword, let_stmt.name, emit_expression(&let_stmt.value))
+            format!(
+                "{} {} = {};",
+                keyword,
+                let_stmt.name,
+                emit_expression(&let_stmt.value, known_variants)
+            )
         }
     }
 }
 
-fn emit_expression(expr: &Expression) -> String {
+fn emit_expression(expr: &Expression, known_variants: &HashSet<String>) -> String {
     match expr {
         Expression::Literal(lit) => emit_literal(lit),
         Expression::Identifier(name) => name.clone(),
         Expression::Call(call) => {
-            let callee = emit_expression(&call.callee);
-            let args = call.args
+            let callee = emit_expression(&call.callee, known_variants);
+            let args = call
+                .args
                 .iter()
-                .map(emit_expression)
+                .map(|e| emit_expression(e, known_variants))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}({})", callee, args)
         }
         Expression::Member(member) => {
-            let object = emit_expression(&member.object);
+            let object = emit_expression(&member.object, known_variants);
             format!("{}.{}", object, member.property)
         }
-        Expression::Match(match_expr) => {
-            emit_match_expression(match_expr)
-        }
-        Expression::Block(block) => {
-            emit_block(block)
-        }
-        Expression::VariantCtor { enum_name, variant, args } => {
+        Expression::Match(match_expr) => emit_match_expression(match_expr, known_variants),
+        Expression::Block(block) => emit_block(block, known_variants),
+        Expression::VariantCtor {
+            enum_name,
+            variant,
+            args,
+        } => {
             let fname = format!("{}_{}", enum_name, variant);
-            let args = args.iter().map(emit_expression).collect::<Vec<_>>().join(", ");
-            format!("{}({})", fname, args)
+            if args.is_empty() {
+                // Unit variant constructors are values (const), not functions
+                fname
+            } else {
+                let args = args
+                    .iter()
+                    .map(|e| emit_expression(e, known_variants))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({})", fname, args)
+            }
         }
         Expression::Binary(binary) => {
-            let left = emit_expression(&binary.left);
-            let right = emit_expression(&binary.right);
+            let left = emit_expression(&binary.left, known_variants);
+            let right = emit_expression(&binary.right, known_variants);
             let op = match binary.operator {
                 BinaryOperator::Add => "+",
                 BinaryOperator::Subtract => "-",
@@ -314,7 +424,13 @@ fn emit_expression(expr: &Expression) -> String {
         Expression::ObjectLiteral(fields) => {
             let fields_str = fields
                 .iter()
-                .map(|field| format!("{}: {}", field.name, emit_expression(&field.value)))
+                .map(|field| {
+                    format!(
+                        "{}: {}",
+                        field.name,
+                        emit_expression(&field.value, known_variants)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{ {} }}", fields_str)
@@ -322,99 +438,139 @@ fn emit_expression(expr: &Expression) -> String {
     }
 }
 
-fn emit_match_expression(match_expr: &MatchExpression) -> String {
-    let scrutinee = emit_expression(&match_expr.scrutinee);
+fn emit_match_expression(match_expr: &MatchExpression, known_variants: &HashSet<String>) -> String {
+    let scrutinee = emit_expression(&match_expr.scrutinee, known_variants);
     let arms = &match_expr.arms;
-    
+
     // Choose lowering strategy based on pattern types
     // Check if all patterns are variant patterns (including unit variants like Inactive)
-    let all_variant_patterns = arms.iter().all(|arm| {
-        match &arm.pattern {
-            Pattern::Variant(_, _) => true,
-            Pattern::Identifier(name) => {
-                // Check if this identifier is actually a unit variant
-                // For now, we'll be conservative and use sequential matching
-                // TODO: Improve this by checking symbol table
-                false
-            }
-            _ => false,
-        }
+    let all_variant_patterns = arms.iter().all(|arm| match &arm.pattern {
+        Pattern::Variant(_, _) => true,
+        Pattern::Identifier(name) => known_variants.contains(name),
+        _ => false,
     });
-    
-    if all_variant_patterns && !arms.is_empty() {
-        // Switch-based lowering for all-variant matches
-        emit_variant_switch_match(&scrutinee, arms)
+
+    // Check if any arm has a guard - if so, fall back to if-chain for correctness
+    let any_guard = arms.iter().any(|a| a.guard.is_some());
+
+    // Check if any patterns have nested structure that requires complex conditions
+    let has_nested_patterns = arms.iter().any(|arm| match &arm.pattern {
+        Pattern::Variant(_, patterns) => !patterns.is_empty(),
+        _ => false,
+    });
+
+    if all_variant_patterns && !any_guard && !has_nested_patterns && !arms.is_empty() {
+        // Switch-based lowering for simple variant matches without guards or nesting
+        emit_variant_switch_match(&scrutinee, arms, known_variants)
     } else {
-        // Sequential if-chain for mixed or non-variant patterns
-        emit_sequential_match(&scrutinee, arms)
+        // Sequential if-chain for complex patterns, guards, or nested patterns
+        emit_sequential_match(&scrutinee, arms, known_variants)
     }
 }
 
-fn emit_variant_switch_match(scrutinee: &str, arms: &[MatchArm]) -> String {
+fn emit_variant_switch_match(
+    scrutinee: &str,
+    arms: &[MatchArm],
+    known_variants: &HashSet<String>,
+) -> String {
     let mut output = format!("(() => {{\n  const _s = {};\n", scrutinee);
     output.push_str("  switch (_s.tag) {\n");
-    
+
     for arm in arms {
-        if let Pattern::Variant(variant_name, _) = &arm.pattern {
-            output.push_str(&format!("    case \"{}\":\n", variant_name));
-            
-            // Use PatternCheck abstraction for consistency
-            let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s");
-            
-            // Emit pattern bindings
-            for binding in &pattern_check.bindings {
-                output.push_str(&format!("      const {} = {};\n", binding.name, binding.value_expr));
+        match &arm.pattern {
+            Pattern::Variant(variant_name, _) => {
+                output.push_str(&format!("    case \"{}\":\n", variant_name));
+                let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s", known_variants);
+                for binding in &pattern_check.bindings {
+                    output.push_str(&format!(
+                        "      const {} = {};\n",
+                        binding.name, binding.value_expr
+                    ));
+                }
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!(
+                        "      if (!({}) ) break;\n",
+                        emit_expression(guard, known_variants)
+                    ));
+                }
+                output.push_str(&format!(
+                    "      return {};\n",
+                    emit_expression(&arm.body, known_variants)
+                ));
             }
-            
-            // Handle optional guard
-            if let Some(ref guard) = arm.guard {
-                output.push_str(&format!("      if (!({}) ) break;\n", emit_expression(guard)));
+            Pattern::Identifier(name) if known_variants.contains(name) => {
+                // Treat bare identifier that is a known unit variant as a variant arm
+                output.push_str(&format!("    case \"{}\":\n", name));
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!(
+                        "      if (!({}) ) break;\n",
+                        emit_expression(guard, known_variants)
+                    ));
+                }
+                output.push_str(&format!(
+                    "      return {};\n",
+                    emit_expression(&arm.body, known_variants)
+                ));
             }
-            
-            output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            _ => {}
         }
     }
-    
+
     output.push_str("    default:\n");
     output.push_str("      throw new Error('Non-exhaustive match');\n");
     output.push_str("  }\n})()");
-    
+
     output
 }
 
-fn emit_sequential_match(scrutinee: &str, arms: &[MatchArm]) -> String {
+fn emit_sequential_match(
+    scrutinee: &str,
+    arms: &[MatchArm],
+    known_variants: &HashSet<String>,
+) -> String {
     let mut output = format!("(() => {{\n  const _s = {};\n", scrutinee);
-    
+
     for arm in arms {
         // Use PatternCheck abstraction for explicit test vs bind separation
-        let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s");
-        
+        let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s", known_variants);
+
         // Emit the test condition
         output.push_str(&format!("  if ({}) {{\n", pattern_check.test_condition));
-        
+
         // Emit pattern bindings
         for binding in &pattern_check.bindings {
-            output.push_str(&format!("    const {} = {};\n", binding.name, binding.value_expr));
+            output.push_str(&format!(
+                "    const {} = {};\n",
+                binding.name, binding.value_expr
+            ));
         }
-        
+
         // Handle optional guard - now that bindings are in scope
         if let Some(ref guard) = arm.guard {
-            output.push_str(&format!("    if ({}) {{\n", emit_expression(guard)));
-            output.push_str(&format!("      return {};\n", emit_expression(&arm.body)));
+            output.push_str(&format!(
+                "    if ({}) {{\n",
+                emit_expression(guard, known_variants)
+            ));
+            output.push_str(&format!(
+                "      return {};\n",
+                emit_expression(&arm.body, known_variants)
+            ));
             output.push_str("    }\n");
         } else {
-            output.push_str(&format!("    return {};\n", emit_expression(&arm.body)));
+            output.push_str(&format!(
+                "    return {};\n",
+                emit_expression(&arm.body, known_variants)
+            ));
         }
-        
+
         output.push_str("  }\n");
     }
-    
+
     output.push_str("  throw new Error('Non-exhaustive match');\n");
     output.push_str("})()");
-    
+
     output
 }
-
 
 fn emit_literal(lit: &Literal) -> String {
     match lit {
@@ -443,9 +599,7 @@ fn emit_import(import: &Import) -> String {
         ImportClause::Namespace(name) => {
             format!("* as {}", name)
         }
-        ImportClause::Default(name) => {
-            name.clone()
-        }
+        ImportClause::Default(name) => name.clone(),
         ImportClause::Mixed { default, named } => {
             let named_str = named
                 .iter()
@@ -461,7 +615,7 @@ fn emit_import(import: &Import) -> String {
             format!("{}, {{ {} }}", default, named_str)
         }
     };
-    
+
     let rewritten_path = rewrite_import_path(&import.path);
     format!("import {} from \"{}\";", import_clause, rewritten_path)
 }
@@ -476,7 +630,10 @@ fn rewrite_import_path(path: &str) -> String {
         } else if path.ends_with('/') {
             // Directory import, leave as-is
             path.to_string()
-        } else if path.rfind('.').map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0)) {
+        } else if path
+            .rfind('.')
+            .map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0))
+        {
             // No extension after the last slash, add .js
             format!("{}.js", path)
         } else {
@@ -489,7 +646,10 @@ fn rewrite_import_path(path: &str) -> String {
             path.replace(".hk", ".js")
         } else if path.ends_with('/') {
             path.to_string()
-        } else if path.rfind('.').map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0)) {
+        } else if path
+            .rfind('.')
+            .map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0))
+        {
             format!("{}.js", path)
         } else {
             path.to_string()
@@ -500,59 +660,69 @@ fn rewrite_import_path(path: &str) -> String {
     }
 }
 
-fn emit_export(export: &Export) -> String {
+fn emit_export(export: &Export, known_variants: &HashSet<String>) -> String {
     match export {
         Export::Item(item) => {
             // Generate the export by prefixing "export " to the item
             match &item.value {
                 Item::Function(func) => {
-                    let params = func.params
+                    let params = func
+                        .params
                         .iter()
                         .map(|p| p.name.clone())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    
+
                     let body = if let Some(ref body) = func.body {
-                        emit_block(body)
+                        emit_block(body, known_variants)
                     } else {
                         "{ /* external function */ }".to_string()
                     };
-                    
+
                     format!("export function {}({}) {}", func.name, params, body)
                 }
                 Item::Enum(enm) => {
-                    format!("export {}", emit_enum(enm).trim_end())
+                    let mut output = emit_enum_definition(enm);
+                    let exports = get_enum_exports(enm);
+                    if !exports.is_empty() {
+                        output.push_str(&format!("export {{ {} }};", exports.join(", ")));
+                    }
+                    output
                 }
                 Item::Struct(strct) => {
-                    format!("export {}", emit_struct(strct).trim_start())
+                    let mut output = emit_struct_definition(strct);
+                    let exports = get_struct_exports(strct);
+                    if !exports.is_empty() {
+                        output.push_str(&format!("\nexport {{ {} }};", exports.join(", ")));
+                    }
+                    output
                 }
                 _ => {
                     format!("// TODO: Export for {:?}", item.value)
                 }
             }
         }
-        Export::Default(item) => {
-            match &item.value {
-                Item::Function(func) => {
-                    let params = func.params
-                        .iter()
-                        .map(|p| p.name.clone())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    
-                    let body = if let Some(ref body) = func.body {
-                        emit_block(body)
-                    } else {
-                        "{ /* external function */ }".to_string()
-                    };
-                    
-                    format!("export default function {}({}) {}", func.name, params, body)
-                }
-                _ => {
-                    format!("// TODO: Default export for {:?}", item.value)
-                }
+        Export::Default(item) => match &item.value {
+            Item::Function(func) => {
+                let params = func
+                    .params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let body = if let Some(ref body) = func.body {
+                    emit_block(body, known_variants)
+                } else {
+                    "{ /* external function */ }".to_string()
+                };
+
+                format!("export default function {}({}) {}", func.name, params, body)
             }
-        }
+            _ => {
+                format!("// TODO: Default export for {:?}", item.value)
+            }
+        },
         Export::Named(items) => {
             let names = items
                 .iter()
@@ -586,5 +756,121 @@ fn emit_export(export: &Export) -> String {
             let rewritten_path = rewrite_import_path(path);
             format!("export * from \"{}\";", rewritten_path)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syntax::{Lexer, Parser as HuskParser};
+
+    fn parse_husk_code(input: &str) -> Module {
+        let mut lexer = Lexer::new(input.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = HuskParser::new(tokens);
+        let (module, diagnostics) = parser.parse();
+
+        if !diagnostics.is_empty() {
+            panic!("Parse errors: {:?}", diagnostics);
+        }
+
+        module
+    }
+
+    #[test]
+    fn test_emit_enum_with_exports() {
+        let input = r#"
+            pub enum Status {
+                Active,
+                Inactive,
+                Pending(string)
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should have separate const declarations and export statement
+        assert!(output.contains("const Status_Active = { tag: \"Active\" };"));
+        assert!(
+            output.contains(
+                "function Status_Pending(arg0) { return { tag: \"Pending\", 0: arg0 }; }"
+            )
+        );
+        assert!(output.contains("const Status = { Active: Status_Active, Inactive: Status_Inactive, Pending: Status_Pending };"));
+        assert!(
+            output.contains("export { Status_Active, Status_Inactive, Status_Pending, Status };")
+        );
+    }
+
+    #[test]
+    fn test_emit_recursive_pattern_matching() {
+        let input = r#"
+            pub enum Option {
+                None,
+                Some(string)
+            }
+            
+            pub enum Result {
+                Ok(Option),
+                Err(string)
+            }
+            
+            fn test(x: Result) {
+                match x {
+                    Ok(Some(value)) => value,
+                    Ok(None) => "empty",
+                    Err(msg) => msg
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should have nested pattern conditions with proper arity checks
+        assert!(output.contains(
+            "_s.tag === \"Ok\" && typeof _s[0] !== 'undefined' && _s[0].tag === \"Some\""
+        ));
+        assert!(output.contains(
+            "_s.tag === \"Ok\" && typeof _s[0] !== 'undefined' && _s[0].tag === \"None\""
+        ));
+        assert!(output.contains("_s.tag === \"Err\" && typeof _s[0] !== 'undefined'"));
+
+        // Should bind nested values correctly
+        assert!(output.contains("const value = _s[0][0];"));
+    }
+
+    #[test]
+    fn test_emit_tuple_pattern_matching() {
+        let input = r#"
+            fn test(point: (number, string)) {
+                match point {
+                    (x, "center") => x,
+                    (0, y) => y,
+                    _ => "unknown"
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Tuple patterns should check for objects, not arrays
+        assert!(output.contains("typeof _s === 'object' && _s !== null && !Array.isArray(_s)"));
+        assert!(output.contains("typeof _s[1] !== 'undefined'"));
+        assert!(output.contains("_s[1] === \"center\""));
+        assert!(output.contains("_s[0] === 0"));
+    }
+
+    #[test]
+    fn test_import_path_rewriting() {
+        assert_eq!(rewrite_import_path("./module.hk"), "./module.js");
+        assert_eq!(rewrite_import_path("../utils.hk"), "../utils.js");
+        assert_eq!(
+            rewrite_import_path("./components/button"),
+            "./components/button.js"
+        );
+        assert_eq!(rewrite_import_path("react"), "react"); // Package imports unchanged
     }
 }

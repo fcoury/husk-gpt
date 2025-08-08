@@ -1,0 +1,5 @@
+// Module A: defines the enum
+pub enum Status {
+  Active,
+  Inactive,
+}

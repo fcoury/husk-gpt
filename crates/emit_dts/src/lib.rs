@@ -1,9 +1,11 @@
+#![allow(clippy::uninlined_format_args, clippy::format_in_format_args)]
+
 use syntax::ast::*;
-use syntax::ast::{ImportClause, Export, ExportItem};
+use syntax::ast::{Export, ImportClause};
 
 pub fn emit(module: &Module) -> String {
     let mut output = String::new();
-    
+
     for item in &module.items {
         match &item.value {
             Item::Function(func) if matches!(func.vis, Visibility::Public) => {
@@ -39,29 +41,34 @@ pub fn emit(module: &Module) -> String {
             }
         }
     }
-    
+
     output
 }
 
 fn emit_function(func: &Function) -> String {
-    let params = func.params
+    let params = func
+        .params
         .iter()
         .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
         .collect::<Vec<_>>()
         .join(", ");
-    
-    let return_type = func.return_type
+
+    let return_type = func
+        .return_type
         .as_ref()
         .map(emit_type)
         .unwrap_or_else(|| "void".to_string());
-    
-    format!("export declare function {}({}): {};", func.name, params, return_type)
+
+    format!(
+        "export declare function {}({}): {};",
+        func.name, params, return_type
+    )
 }
 
 fn emit_enum(enm: &Enum) -> String {
     let mut output = String::new();
     let mut variants = Vec::new();
-    
+
     // Generate constructor function declarations and type variants
     for variant in &enm.variants {
         if variant.fields.is_empty() {
@@ -74,15 +81,17 @@ fn emit_enum(enm: &Enum) -> String {
             ));
         } else {
             // Tuple variant
-            let fields = variant.fields
+            let fields = variant
+                .fields
                 .iter()
                 .enumerate()
                 .map(|(i, ty)| format!("{}: {}", i, emit_type(ty)))
                 .collect::<Vec<_>>()
                 .join("; ");
             variants.push(format!("{{ tag: \"{}\"; {} }}", variant.name, fields));
-            
-            let params = variant.fields
+
+            let params = variant
+                .fields
                 .iter()
                 .enumerate()
                 .map(|(i, ty)| format!("arg{}: {}", i, emit_type(ty)))
@@ -97,9 +106,13 @@ fn emit_enum(enm: &Enum) -> String {
             ));
         }
     }
-    
+
     // Add enum type and namespace
-    output.push_str(&format!("export type {} = {};\n", enm.name, variants.join(" | ")));
+    output.push_str(&format!(
+        "export type {} = {};\n",
+        enm.name,
+        variants.join(" | ")
+    ));
     output.push_str(&format!(
         "export declare const {}: {{ {} }};\n",
         enm.name,
@@ -109,12 +122,13 @@ fn emit_enum(enm: &Enum) -> String {
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    
+
     output
 }
 
 fn emit_struct(strct: &Struct) -> String {
-    let fields = strct.fields
+    let fields = strct
+        .fields
         .iter()
         .filter(|f| matches!(f.vis, Visibility::Public))
         .map(|field| {
@@ -123,23 +137,24 @@ fn emit_struct(strct: &Struct) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    
+
     // Generate interface for the struct type
     let interface = format!("export interface {} {{\n{}\n}}", strct.name, fields);
-    
+
     // Generate constructor function declaration
-    let constructor_params = strct.fields
+    let constructor_params = strct
+        .fields
         .iter()
         .filter(|f| matches!(f.vis, Visibility::Public))
         .map(|f| format!("{}: {}", f.name, emit_type(&f.ty)))
         .collect::<Vec<_>>()
         .join(", ");
-    
+
     let constructor = format!(
         "export declare function {}(fields: {{ {} }}): {};",
         strct.name, constructor_params, strct.name
     );
-    
+
     format!("{}\n{}", interface, constructor)
 }
 
@@ -148,25 +163,28 @@ fn emit_type_alias(alias: &TypeAlias) -> String {
 }
 
 fn emit_interface(interface: &Interface) -> String {
-    let methods = interface.methods
+    let methods = interface
+        .methods
         .iter()
         .map(|method| {
-            let params = method.params
+            let params = method
+                .params
                 .iter()
                 .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            
-            let return_type = method.return_type
+
+            let return_type = method
+                .return_type
                 .as_ref()
                 .map(emit_type)
                 .unwrap_or_else(|| "void".to_string());
-            
+
             format!("  {}({}): {};", method.name, params, return_type)
         })
         .collect::<Vec<_>>()
         .join("\n");
-    
+
     format!("export interface {} {{\n{}\n}}", interface.name, methods)
 }
 
@@ -178,37 +196,17 @@ fn emit_type(ty: &Type) -> String {
             if args.is_empty() {
                 name.clone()
             } else {
-                let args_str = args
-                    .iter()
-                    .map(emit_type)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let args_str = args.iter().map(emit_type).collect::<Vec<_>>().join(", ");
                 format!("{}<{}>", name, args_str)
             }
         }
-        Type::Union(types) => {
-            types
-                .iter()
-                .map(emit_type)
-                .collect::<Vec<_>>()
-                .join(" | ")
-        }
-        Type::Intersection(types) => {
-            types
-                .iter()
-                .map(emit_type)
-                .collect::<Vec<_>>()
-                .join(" & ")
-        }
+        Type::Union(types) => types.iter().map(emit_type).collect::<Vec<_>>().join(" | "),
+        Type::Intersection(types) => types.iter().map(emit_type).collect::<Vec<_>>().join(" & "),
         Type::Array(element_type) => {
             format!("{}[]", emit_type(element_type))
         }
         Type::Tuple(types) => {
-            let types_str = types
-                .iter()
-                .map(emit_type)
-                .collect::<Vec<_>>()
-                .join(", ");
+            let types_str = types.iter().map(emit_type).collect::<Vec<_>>().join(", ");
             format!("[{}]", types_str)
         }
         Type::Option(inner) => {
@@ -254,9 +252,7 @@ fn emit_import_declaration(import: &Import) -> String {
         ImportClause::Namespace(name) => {
             format!("* as {}", name)
         }
-        ImportClause::Default(name) => {
-            name.clone()
-        }
+        ImportClause::Default(name) => name.clone(),
         ImportClause::Mixed { default, named } => {
             let named_str = named
                 .iter()
@@ -272,7 +268,7 @@ fn emit_import_declaration(import: &Import) -> String {
             format!("{}, {{ {} }}", default, named_str)
         }
     };
-    
+
     let rewritten_path = rewrite_dts_import_path(&import.path);
     format!("import {} from \"{}\";", import_clause, rewritten_path)
 }
@@ -304,80 +300,88 @@ fn emit_export_declaration(export: &Export) -> String {
     match export {
         Export::Item(item) => {
             match &item.value {
-        Item::Function(func) => {
-            let params = func.params
-                .iter()
-                .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            
-            let return_type = func.return_type
-                .as_ref()
-                .map(emit_type)
-                .unwrap_or_else(|| "void".to_string());
-            
-            format!("export declare function {}({}): {};", func.name, params, return_type)
-        }
-        Item::Enum(enm) => {
-            let enum_output = emit_enum(enm);
-            // Add export prefix to each line
-            enum_output
-                .lines()
-                .map(|line| {
-                    if line.trim().is_empty() {
-                        line.to_string()
-                    } else if line.starts_with("export") {
-                        line.to_string()
-                    } else {
-                        format!("export {}", line.trim_start())
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-        Item::Struct(strct) => {
-            let struct_output = emit_struct(strct);
-            // Add export prefix to each line
-            struct_output
-                .lines()
-                .map(|line| {
-                    if line.trim().is_empty() {
-                        line.to_string()
-                    } else if line.starts_with("export") {
-                        line.to_string()
-                    } else {
-                        format!("export {}", line.trim_start())
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+                Item::Function(func) => {
+                    let params = func
+                        .params
+                        .iter()
+                        .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    let return_type = func
+                        .return_type
+                        .as_ref()
+                        .map(emit_type)
+                        .unwrap_or_else(|| "void".to_string());
+
+                    format!(
+                        "export declare function {}({}): {};",
+                        func.name, params, return_type
+                    )
+                }
+                Item::Enum(enm) => {
+                    let enum_output = emit_enum(enm);
+                    // Add export prefix to each line
+                    enum_output
+                        .lines()
+                        .map(|line| {
+                            if line.trim().is_empty() {
+                                line.to_string()
+                            } else if line.starts_with("export") {
+                                line.to_string()
+                            } else {
+                                format!("export {}", line.trim_start())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+                Item::Struct(strct) => {
+                    let struct_output = emit_struct(strct);
+                    // Add export prefix to each line
+                    struct_output
+                        .lines()
+                        .map(|line| {
+                            if line.trim().is_empty() {
+                                line.to_string()
+                            } else if line.starts_with("export") {
+                                line.to_string()
+                            } else {
+                                format!("export {}", line.trim_start())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
                 _ => {
                     format!("// TODO: Export declaration for {:?}", item.value)
                 }
             }
         }
-        Export::Default(item) => {
-            match &item.value {
-                Item::Function(func) => {
-                    let params = func.params
-                        .iter()
-                        .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    
-                    let return_type = func.return_type
-                        .as_ref()
-                        .map(emit_type)
-                        .unwrap_or_else(|| "void".to_string());
-                    
-                    format!("export default function {}({}): {};", func.name, params, return_type)
-                }
-                _ => {
-                    format!("// TODO: Default export declaration for {:?}", item.value)
-                }
+        Export::Default(item) => match &item.value {
+            Item::Function(func) => {
+                let params = func
+                    .params
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name, emit_type(&p.ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let return_type = func
+                    .return_type
+                    .as_ref()
+                    .map(emit_type)
+                    .unwrap_or_else(|| "void".to_string());
+
+                format!(
+                    "export default function {}({}): {};",
+                    func.name, params, return_type
+                )
             }
-        }
+            _ => {
+                format!("// TODO: Default export declaration for {:?}", item.value)
+            }
+        },
         Export::Named(items) => {
             let names = items
                 .iter()

@@ -1,5 +1,5 @@
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use std::collections::HashMap;
-use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
@@ -10,11 +10,19 @@ pub struct Span {
 
 impl Span {
     pub fn new(file_id: u32, start: u32, end: u32) -> Self {
-        Self { file_id, start, end }
+        Self {
+            file_id,
+            start,
+            end,
+        }
     }
 
     pub fn len(&self) -> u32 {
         self.end - self.start
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
     }
 }
 
@@ -100,7 +108,9 @@ impl Reporter {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| matches!(d.kind, DiagKind::Error(_)))
+        self.diagnostics
+            .iter()
+            .any(|d| matches!(d.kind, DiagKind::Error(_)))
     }
 
     pub fn print_all(&self) {
@@ -111,7 +121,7 @@ impl Reporter {
 
     fn print_diagnostic(&self, diagnostic: &Diagnostic) {
         let (file_name, file_content) = &self.files[&diagnostic.span.file_id];
-        
+
         let report_kind = match diagnostic.kind {
             DiagKind::Error(_) => ReportKind::Error,
             DiagKind::Warning(_) => ReportKind::Warning,
@@ -121,20 +131,23 @@ impl Reporter {
         let mut report = Report::build(report_kind, file_name, diagnostic.span.start as usize)
             .with_message(&diagnostic.message)
             .with_label(
-                Label::new((file_name, diagnostic.span.start as usize..diagnostic.span.end as usize))
-                    .with_message(&diagnostic.message)
-                    .with_color(match diagnostic.kind {
-                        DiagKind::Error(_) => Color::Red,
-                        DiagKind::Warning(_) => Color::Yellow,
-                        DiagKind::Note => Color::Blue,
-                    })
+                Label::new((
+                    file_name,
+                    diagnostic.span.start as usize..diagnostic.span.end as usize,
+                ))
+                .with_message(&diagnostic.message)
+                .with_color(match diagnostic.kind {
+                    DiagKind::Error(_) => Color::Red,
+                    DiagKind::Warning(_) => Color::Yellow,
+                    DiagKind::Note => Color::Blue,
+                }),
             );
 
         for (span, message) in &diagnostic.labels {
             report = report.with_label(
                 Label::new((file_name, span.start as usize..span.end as usize))
                     .with_message(message)
-                    .with_color(Color::Cyan)
+                    .with_color(Color::Cyan),
             );
         }
 

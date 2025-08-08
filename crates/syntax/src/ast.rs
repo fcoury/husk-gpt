@@ -88,9 +88,12 @@ pub struct Import {
 #[derive(Debug, Clone)]
 pub enum ImportClause {
     Named(Vec<ImportItem>),
-    Namespace(String),  // import * as name
-    Default(String),    // import defaultName
-    Mixed { default: String, named: Vec<ImportItem> }, // import defaultName, { named }
+    Namespace(String), // import * as name
+    Default(String),   // import defaultName
+    Mixed {
+        default: String,
+        named: Vec<ImportItem>,
+    }, // import defaultName, { named }
 }
 
 #[derive(Debug, Clone)]
@@ -101,11 +104,14 @@ pub struct ImportItem {
 
 #[derive(Debug, Clone)]
 pub enum Export {
-    Item(Box<Spanned<Item>>),     // export fn foo() {}
-    Named(Vec<ExportItem>),       // export { foo, bar }
-    NamedFrom { items: Vec<ExportItem>, path: String }, // export { foo } from "./mod"
-    All(String),                  // export * from "./mod"
-    Default(Box<Spanned<Item>>),  // export default expression
+    Item(Box<Spanned<Item>>), // export fn foo() {}
+    Named(Vec<ExportItem>),   // export { foo, bar }
+    NamedFrom {
+        items: Vec<ExportItem>,
+        path: String,
+    }, // export { foo } from "./mod"
+    All(String),              // export * from "./mod"
+    Default(Box<Spanned<Item>>), // export default expression
 }
 
 #[derive(Debug, Clone)]
@@ -169,7 +175,11 @@ pub enum Expression {
     Match(MatchExpression),
     Block(Block),
     Binary(BinaryExpression),
-    VariantCtor { enum_name: String, variant: String, args: Vec<Expression> },
+    VariantCtor {
+        enum_name: String,
+        variant: String,
+        args: Vec<Expression>,
+    },
     ObjectLiteral(Vec<ObjectField>),
 }
 

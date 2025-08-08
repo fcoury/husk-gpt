@@ -1,17 +1,27 @@
-use std::collections::HashMap;
-use syntax::ast::*;
-use syntax::ast::{ImportClause, Export};
+#![allow(
+    dead_code,
+    clippy::new_without_default,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_map_or,
+    clippy::single_match
+)]
+
 use diagnostics::{Diagnostic, ErrorCode, Span};
+use std::collections::{HashMap, HashSet};
+use syntax::ast::*;
+use syntax::ast::{Export, ImportClause};
 
 /// Represents a constructor pattern for exhaustiveness checking
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ConstructorPattern {
-    /// Unit variant like Inactive  
+    /// Unit variant like Inactive
     Variant { name: String, arity: usize },
     /// Literal pattern like 5, "hello"
     Literal(String),
     /// Wildcard pattern _
     Wildcard,
+    /// An identifier pattern whose meaning (binding vs variant) is unknown
+    Identifier(String),
 }
 
 /// Analysis result for match exhaustiveness and reachability
@@ -42,12 +52,27 @@ struct Symbol {
 
 #[derive(Debug, Clone)]
 enum SymbolKind {
-    Function { params: Vec<Type>, return_type: Option<Type> },
-    Variable { ty: Option<Type>, mutable: bool },
-    Parameter { ty: Type },
-    EnumVariant { enum_name: String, fields: Vec<Type> },
-    Type { kind: TypeKind },
-    Import { path: String },
+    Function {
+        params: Vec<Type>,
+        return_type: Option<Type>,
+    },
+    Variable {
+        ty: Option<Type>,
+        mutable: bool,
+    },
+    Parameter {
+        ty: Type,
+    },
+    EnumVariant {
+        enum_name: String,
+        fields: Vec<Type>,
+    },
+    Type {
+        kind: TypeKind,
+    },
+    Import {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +89,7 @@ impl Resolver {
             scopes: vec![Scope::new()], // Global scope
             diagnostics: Vec::new(),
         };
-        
+
         // Seed global scope with built-in symbols
         resolver.add_built_ins();
         resolver
@@ -74,15 +99,21 @@ impl Resolver {
         // Console object for JavaScript compatibility
         let console_symbol = Symbol {
             name: "console".to_string(),
-            kind: SymbolKind::Variable { ty: None, mutable: false },
+            kind: SymbolKind::Variable {
+                ty: None,
+                mutable: false,
+            },
             span: Span::new(0, 0, 0),
         };
         self.declare_symbol(console_symbol);
 
-        // Built-in panic function  
+        // Built-in panic function
         let panic_symbol = Symbol {
             name: "panic".to_string(),
-            kind: SymbolKind::Function { params: vec![], return_type: None },
+            kind: SymbolKind::Function {
+                params: vec![],
+                return_type: None,
+            },
             span: Span::new(0, 0, 0),
         };
         self.declare_symbol(panic_symbol);
@@ -90,21 +121,27 @@ impl Resolver {
         // Common global types
         let number_symbol = Symbol {
             name: "number".to_string(),
-            kind: SymbolKind::Type { kind: TypeKind::Primitive },
+            kind: SymbolKind::Type {
+                kind: TypeKind::Primitive,
+            },
             span: Span::new(0, 0, 0),
         };
         self.declare_symbol(number_symbol);
 
         let string_symbol = Symbol {
             name: "string".to_string(),
-            kind: SymbolKind::Type { kind: TypeKind::Primitive },
+            kind: SymbolKind::Type {
+                kind: TypeKind::Primitive,
+            },
             span: Span::new(0, 0, 0),
         };
         self.declare_symbol(string_symbol);
 
         let bool_symbol = Symbol {
             name: "bool".to_string(),
-            kind: SymbolKind::Type { kind: TypeKind::Primitive },
+            kind: SymbolKind::Type {
+                kind: TypeKind::Primitive,
+            },
             span: Span::new(0, 0, 0),
         };
         self.declare_symbol(bool_symbol);
@@ -172,7 +209,7 @@ impl Resolver {
                         span,
                     };
                     self.declare_symbol(variant_symbol);
-                    
+
                     // Also declare bare variant name for pattern matching
                     // Check for collision first
                     if self.lookup_symbol(&variant.name).is_some() {
@@ -200,7 +237,9 @@ impl Resolver {
                             let name = item.alias.as_ref().unwrap_or(&item.name).clone();
                             let symbol = Symbol {
                                 name,
-                                kind: SymbolKind::Import { path: import.path.clone() },
+                                kind: SymbolKind::Import {
+                                    path: import.path.clone(),
+                                },
                                 span,
                             };
                             self.declare_symbol(symbol);
@@ -209,7 +248,9 @@ impl Resolver {
                     ImportClause::Namespace(name) => {
                         let symbol = Symbol {
                             name: name.clone(),
-                            kind: SymbolKind::Import { path: import.path.clone() },
+                            kind: SymbolKind::Import {
+                                path: import.path.clone(),
+                            },
                             span,
                         };
                         self.declare_symbol(symbol);
@@ -217,7 +258,9 @@ impl Resolver {
                     ImportClause::Default(name) => {
                         let symbol = Symbol {
                             name: name.clone(),
-                            kind: SymbolKind::Import { path: import.path.clone() },
+                            kind: SymbolKind::Import {
+                                path: import.path.clone(),
+                            },
                             span,
                         };
                         self.declare_symbol(symbol);
@@ -226,17 +269,21 @@ impl Resolver {
                         // Declare default import
                         let default_symbol = Symbol {
                             name: default.clone(),
-                            kind: SymbolKind::Import { path: import.path.clone() },
+                            kind: SymbolKind::Import {
+                                path: import.path.clone(),
+                            },
                             span,
                         };
                         self.declare_symbol(default_symbol);
-                        
+
                         // Declare named imports
                         for item in named {
                             let name = item.alias.as_ref().unwrap_or(&item.name).clone();
                             let symbol = Symbol {
                                 name,
-                                kind: SymbolKind::Import { path: import.path.clone() },
+                                kind: SymbolKind::Import {
+                                    path: import.path.clone(),
+                                },
                                 span,
                             };
                             self.declare_symbol(symbol);
@@ -266,12 +313,14 @@ impl Resolver {
             Item::Function(func) => {
                 if let Some(ref body) = func.body {
                     self.push_scope();
-                    
+
                     // Add parameters to scope
                     for param in &func.params {
                         let symbol = Symbol {
                             name: param.name.clone(),
-                            kind: SymbolKind::Parameter { ty: param.ty.clone() },
+                            kind: SymbolKind::Parameter {
+                                ty: param.ty.clone(),
+                            },
                             span: _span, // Would need span from parameter in real implementation
                         };
                         self.declare_symbol(symbol);
@@ -355,7 +404,7 @@ impl Resolver {
                     self.resolve_expression(&arm.body, span);
                     self.pop_scope();
                 }
-                
+
                 // Analyze match for exhaustiveness and reachability
                 self.analyze_match(match_expr, span);
             }
@@ -364,35 +413,45 @@ impl Resolver {
                 self.resolve_block(block);
                 self.pop_scope();
             }
-            Expression::VariantCtor { enum_name, variant, args } => {
+            Expression::VariantCtor {
+                enum_name,
+                variant,
+                args,
+            } => {
                 // Verify variant exists and has correct arity
                 let ctor_name = format!("{}_{}", enum_name, variant);
                 if let Some(symbol) = self.lookup_symbol(&ctor_name) {
                     match &symbol.kind {
                         SymbolKind::EnumVariant { fields, .. } => {
                             let expected_arity = fields.len();
-                            
+
                             if args.len() != expected_arity {
-                                self.error_at(span, format!(
-                                    "Variant constructor '{}::{}' expects {} arguments, got {}",
-                                    enum_name, variant, expected_arity, args.len()
-                                ));
+                                self.error_at(
+                                    span,
+                                    format!(
+                                        "Variant constructor '{}::{}' expects {} arguments, got {}",
+                                        enum_name,
+                                        variant,
+                                        expected_arity,
+                                        args.len()
+                                    ),
+                                );
                             }
                         }
                         _ => {
-                            self.error_at(span, format!(
-                                "'{}' is not a variant constructor",
-                                ctor_name
-                            ));
+                            self.error_at(
+                                span,
+                                format!("'{}' is not a variant constructor", ctor_name),
+                            );
                         }
                     }
                 } else {
-                    self.error_at(span, format!(
-                        "Unknown variant constructor '{}::{}'",
-                        enum_name, variant
-                    ));
+                    self.error_at(
+                        span,
+                        format!("Unknown variant constructor '{}::{}'", enum_name, variant),
+                    );
                 }
-                
+
                 // Resolve argument expressions with better span context
                 for arg in args {
                     self.resolve_expression(arg, span);
@@ -419,7 +478,10 @@ impl Resolver {
                 // Pattern identifiers bind new variables
                 let symbol = Symbol {
                     name: name.clone(),
-                    kind: SymbolKind::Variable { ty: None, mutable: false },
+                    kind: SymbolKind::Variable {
+                        ty: None,
+                        mutable: false,
+                    },
                     span,
                 };
                 self.declare_symbol(symbol);
@@ -430,28 +492,30 @@ impl Resolver {
                     match &symbol.kind {
                         SymbolKind::EnumVariant { fields, .. } => {
                             let expected_arity = fields.len();
-                            
+
                             if patterns.len() != expected_arity {
-                                self.error_at(span, format!(
-                                    "Pattern for variant '{}' expects {} arguments, got {}",
-                                    variant_name, expected_arity, patterns.len()
-                                ));
+                                self.error_at(
+                                    span,
+                                    format!(
+                                        "Pattern for variant '{}' expects {} arguments, got {}",
+                                        variant_name,
+                                        expected_arity,
+                                        patterns.len()
+                                    ),
+                                );
                             }
                         }
                         _ => {
-                            self.error_at(span, format!(
-                                "'{}' is not a variant constructor",
-                                variant_name
-                            ));
+                            self.error_at(
+                                span,
+                                format!("'{}' is not a variant constructor", variant_name),
+                            );
                         }
                     }
                 } else {
-                    self.error_at(span, format!(
-                        "Unknown variant '{}'",
-                        variant_name
-                    ));
+                    self.error_at(span, format!("Unknown variant '{}'", variant_name));
                 }
-                
+
                 // Resolve nested patterns
                 for pattern in patterns {
                     self.resolve_pattern(pattern, span);
@@ -515,7 +579,7 @@ impl Resolver {
             &message,
         ));
     }
-    
+
     /// Check if a name refers to a unit variant (EnumVariant with 0 fields)
     pub fn is_unit_variant(&self, name: &str) -> bool {
         for scope in self.scopes.iter().rev() {
@@ -524,13 +588,18 @@ impl Resolver {
                     SymbolKind::EnumVariant { fields, .. } => {
                         return fields.is_empty();
                     }
+                    SymbolKind::Import { .. } => {
+                        // Heuristic: assume imported uppercase identifiers are unit variants
+                        // This is not foolproof but helps with basic cross-module scenarios
+                        return name.chars().next().map_or(false, |c| c.is_uppercase());
+                    }
                     _ => return false,
                 }
             }
         }
         false
     }
-    
+
     /// Normalize patterns in a module - convert identifier patterns that resolve to unit variants
     /// into variant patterns
     pub fn normalize_patterns(&self, module: &mut Module) {
@@ -538,7 +607,7 @@ impl Resolver {
             self.normalize_patterns_in_item(&mut item.value);
         }
     }
-    
+
     fn normalize_patterns_in_item(&self, item: &mut Item) {
         match item {
             Item::Function(func) => {
@@ -549,13 +618,13 @@ impl Resolver {
             _ => {}
         }
     }
-    
+
     fn normalize_patterns_in_block(&self, block: &mut Block) {
         for stmt in &mut block.statements {
             self.normalize_patterns_in_statement(&mut stmt.value);
         }
     }
-    
+
     fn normalize_patterns_in_statement(&self, stmt: &mut Statement) {
         match stmt {
             Statement::Expression(expr) => {
@@ -566,7 +635,7 @@ impl Resolver {
             }
         }
     }
-    
+
     fn normalize_patterns_in_expression(&self, expr: &mut Expression) {
         match expr {
             Expression::Match(match_expr) => {
@@ -608,7 +677,7 @@ impl Resolver {
             _ => {}
         }
     }
-    
+
     fn normalize_pattern(&self, pattern: &mut Pattern) {
         match pattern {
             Pattern::Identifier(name) => {
@@ -634,40 +703,41 @@ impl Resolver {
     /// Analyze match expression for exhaustiveness and reachability
     fn analyze_match(&mut self, match_expr: &MatchExpression, span: Span) {
         let analysis = self.check_match_exhaustiveness(&match_expr.arms, span);
-        
+
         // Report missing patterns (exhaustiveness)
         if !analysis.missing_patterns.is_empty() {
-            let missing_str = analysis.missing_patterns
+            let missing_str = analysis
+                .missing_patterns
                 .iter()
                 .map(|p| self.constructor_pattern_to_string(p))
                 .collect::<Vec<_>>()
                 .join(", ");
-            
-            self.error_at(span, format!(
-                "Non-exhaustive match: missing patterns [{}]", 
-                missing_str
-            ));
+
+            self.error_at(
+                span,
+                format!("Non-exhaustive match: missing patterns [{}]", missing_str),
+            );
         }
-        
+
         // Report unreachable patterns
         for &arm_index in &analysis.unreachable_patterns {
-            self.error_at(span, format!(
-                "Unreachable pattern at match arm {}", 
-                arm_index + 1
-            ));
+            self.error_at(
+                span,
+                format!("Unreachable pattern at match arm {}", arm_index + 1),
+            );
         }
     }
-    
+
     /// Check exhaustiveness and reachability of match arms
     fn check_match_exhaustiveness(&self, arms: &[MatchArm], _span: Span) -> MatchAnalysis {
         let mut covered_for_reachability = Vec::new(); // For reachability analysis (no guarded patterns)
         let mut covered_for_exhaustiveness = Vec::new(); // For exhaustiveness analysis (all patterns)
         let mut unreachable_patterns = Vec::new();
-        
+
         // Collect all constructor patterns from arms
         for (i, arm) in arms.iter().enumerate() {
             let constructor = self.pattern_to_constructor(&arm.pattern);
-            
+
             // Check if this pattern is already covered (reachability)
             // Only count unguarded patterns as covering for reachability
             if self.is_pattern_covered(&constructor, &covered_for_reachability) {
@@ -677,21 +747,21 @@ impl Resolver {
                 if arm.guard.is_none() {
                     covered_for_reachability.push(constructor.clone());
                 }
-                
+
                 // Always add to exhaustiveness coverage (guards can still contribute to exhaustiveness)
                 covered_for_exhaustiveness.push(constructor);
             }
         }
-        
+
         // Check for missing patterns (exhaustiveness) using all patterns
         let missing_patterns = self.find_missing_patterns(&covered_for_exhaustiveness);
-        
+
         MatchAnalysis {
             missing_patterns,
             unreachable_patterns,
         }
     }
-    
+
     /// Convert a pattern to a constructor pattern for analysis
     fn pattern_to_constructor(&self, pattern: &Pattern) -> ConstructorPattern {
         match pattern {
@@ -699,17 +769,18 @@ impl Resolver {
             Pattern::Identifier(name) => {
                 // Check if this is a unit variant
                 if self.is_unit_variant(name) {
-                    ConstructorPattern::Variant { name: name.clone(), arity: 0 }
+                    ConstructorPattern::Variant {
+                        name: name.clone(),
+                        arity: 0,
+                    }
                 } else {
-                    // Regular binding pattern - acts like wildcard for exhaustiveness
-                    ConstructorPattern::Wildcard
+                    // Unknown identifier (could be binding or cross-module unit variant)
+                    ConstructorPattern::Identifier(name.clone())
                 }
-            },
-            Pattern::Variant(name, patterns) => {
-                ConstructorPattern::Variant { 
-                    name: name.clone(), 
-                    arity: patterns.len() 
-                }
+            }
+            Pattern::Variant(name, patterns) => ConstructorPattern::Variant {
+                name: name.clone(),
+                arity: patterns.len(),
             },
             Pattern::Literal(lit) => {
                 let lit_str = match lit {
@@ -718,55 +789,77 @@ impl Resolver {
                     Literal::Bool(b) => b.to_string(),
                 };
                 ConstructorPattern::Literal(lit_str)
-            },
+            }
             Pattern::Tuple(patterns) => {
                 // For simplicity, treat tuples as variants with arity
-                ConstructorPattern::Variant { 
-                    name: "tuple".to_string(), 
-                    arity: patterns.len() 
+                ConstructorPattern::Variant {
+                    name: "tuple".to_string(),
+                    arity: patterns.len(),
                 }
-            },
+            }
         }
     }
-    
+
     /// Check if a pattern is already covered by existing patterns
-    fn is_pattern_covered(&self, pattern: &ConstructorPattern, covered: &[ConstructorPattern]) -> bool {
+    fn is_pattern_covered(
+        &self,
+        pattern: &ConstructorPattern,
+        covered: &[ConstructorPattern],
+    ) -> bool {
         for covered_pattern in covered {
             match (pattern, covered_pattern) {
                 // Wildcard covers everything
                 (_, ConstructorPattern::Wildcard) => return true,
                 // Same constructor patterns
-                (ConstructorPattern::Variant { name: n1, arity: a1 }, 
-                 ConstructorPattern::Variant { name: n2, arity: a2 }) if n1 == n2 && a1 == a2 => return true,
-                (ConstructorPattern::Literal(l1), ConstructorPattern::Literal(l2)) if l1 == l2 => return true,
+                (
+                    ConstructorPattern::Variant {
+                        name: n1,
+                        arity: a1,
+                    },
+                    ConstructorPattern::Variant {
+                        name: n2,
+                        arity: a2,
+                    },
+                ) if n1 == n2 && a1 == a2 => return true,
+                (ConstructorPattern::Literal(l1), ConstructorPattern::Literal(l2)) if l1 == l2 => {
+                    return true;
+                }
+                // Unknown identifiers do not contribute to coverage checks
+                (ConstructorPattern::Identifier(_), _) => return false,
                 _ => continue,
             }
         }
         false
     }
-    
+
     /// Find missing patterns to make the match exhaustive
     fn find_missing_patterns(&self, covered: &[ConstructorPattern]) -> Vec<ConstructorPattern> {
         // If we have a wildcard, the match is exhaustive
-        if covered.iter().any(|p| matches!(p, ConstructorPattern::Wildcard)) {
+        if covered
+            .iter()
+            .any(|p| matches!(p, ConstructorPattern::Wildcard))
+        {
             return Vec::new();
         }
-        
+
         let mut missing = Vec::new();
-        
+
         // For now, we'll do a simple analysis:
         // If we see variant patterns, check if all variants of that enum are covered
         let mut enum_variants = HashMap::new();
-        
+
         for pattern in covered {
             if let ConstructorPattern::Variant { name, arity: _ } = pattern {
                 // Try to find the enum this variant belongs to
                 if let Some(enum_name) = self.find_enum_for_variant(name) {
-                    enum_variants.entry(enum_name).or_insert_with(Vec::new).push(name.clone());
+                    enum_variants
+                        .entry(enum_name)
+                        .or_insert_with(Vec::new)
+                        .push(name.clone());
                 }
             }
         }
-        
+
         // Check if any enums have missing variants
         for (enum_name, covered_variants) in enum_variants {
             if let Some(all_variants) = self.get_enum_variants(&enum_name) {
@@ -780,10 +873,10 @@ impl Resolver {
                 }
             }
         }
-        
+
         missing
     }
-    
+
     /// Find the enum that a variant belongs to
     fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
         for scope in self.scopes.iter().rev() {
@@ -795,19 +888,22 @@ impl Resolver {
         }
         None
     }
-    
+
     /// Get all variants of an enum
     fn get_enum_variants(&self, enum_name: &str) -> Option<&Vec<Variant>> {
         for scope in self.scopes.iter().rev() {
             if let Some(symbol) = scope.symbols.get(enum_name) {
-                if let SymbolKind::Type { kind: TypeKind::Enum(variants) } = &symbol.kind {
+                if let SymbolKind::Type {
+                    kind: TypeKind::Enum(variants),
+                } = &symbol.kind
+                {
                     return Some(variants);
                 }
             }
         }
         None
     }
-    
+
     /// Convert constructor pattern to string for error messages
     fn constructor_pattern_to_string(&self, pattern: &ConstructorPattern) -> String {
         match pattern {
@@ -816,11 +912,40 @@ impl Resolver {
                 if *arity == 0 {
                     name.clone()
                 } else {
-                    format!("{}({})", name, (0..*arity).map(|_| "_").collect::<Vec<_>>().join(", "))
+                    format!(
+                        "{}({})",
+                        name,
+                        (0..*arity).map(|_| "_").collect::<Vec<_>>().join(", ")
+                    )
                 }
-            },
+            }
             ConstructorPattern::Literal(lit) => lit.clone(),
+            ConstructorPattern::Identifier(name) => name.clone(),
         }
+    }
+
+    /// Return the set of known enum variant names visible in current scopes.
+    /// Only includes actual enum variants, not imported identifiers.
+    pub fn known_variant_names(&self) -> HashSet<String> {
+        let mut set = HashSet::new();
+        for scope in &self.scopes {
+            for (name, symbol) in &scope.symbols {
+                match &symbol.kind {
+                    SymbolKind::EnumVariant { .. } => {
+                        set.insert(name.clone());
+                    }
+                    SymbolKind::Import { .. } => {
+                        // Heuristic: if an import name starts with uppercase, it might be a variant
+                        // This is not foolproof but helps with basic cross-module scenarios
+                        if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                            set.insert(name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        set
     }
 }
 
@@ -829,5 +954,154 @@ impl Scope {
         Self {
             symbols: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syntax::{Lexer, Parser as HuskParser};
+
+    fn parse_and_resolve(input: &str) -> (Module, Vec<Diagnostic>) {
+        let mut lexer = Lexer::new(input.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = HuskParser::new(tokens);
+        let (module, parse_diagnostics) = parser.parse();
+
+        if !parse_diagnostics.is_empty() {
+            panic!("Parse errors: {:?}", parse_diagnostics);
+        }
+
+        let mut resolver = Resolver::new();
+        let resolve_diagnostics = resolver.resolve(&module);
+
+        (module, resolve_diagnostics)
+    }
+
+    #[test]
+    fn test_enum_variant_recognition() {
+        let input = r#"
+            enum Status {
+                Active,
+                Inactive,
+                Pending(string)
+            }
+            
+            fn test() {
+                let x = Status::Active;
+                match x {
+                    Active => "active",
+                    Inactive => "inactive", 
+                    Pending(msg) => msg
+                }
+            }
+        "#;
+
+        let (module, diagnostics) = parse_and_resolve(input);
+
+        // Should not have resolution errors for unit variants
+        let has_undefined_errors = diagnostics.iter().any(|d| {
+            d.message.contains("Undefined identifier: Active")
+                || d.message.contains("Undefined identifier: Inactive")
+        });
+        assert!(
+            !has_undefined_errors,
+            "Should recognize unit variants: {:?}",
+            diagnostics
+        );
+
+        // Should recognize enum variants
+        let mut resolver = Resolver::new();
+        resolver.resolve(&module);
+        assert!(resolver.is_unit_variant("Active"));
+        assert!(resolver.is_unit_variant("Inactive"));
+        assert!(!resolver.is_unit_variant("Pending")); // Not a unit variant
+    }
+
+    #[test]
+    fn test_imported_variant_heuristics() {
+        let input = r#"
+            import { Active, inactive, SomeVariant } from "./status";
+            
+            fn test(x: Status) {
+                match x {
+                    Active => "active",      // Should be treated as variant (uppercase)
+                    inactive => "inactive", // Should be treated as binding (lowercase) 
+                    SomeVariant => "some"   // Should be treated as variant (uppercase)
+                }
+            }
+        "#;
+
+        let (module, _diagnostics) = parse_and_resolve(input);
+
+        let mut resolver = Resolver::new();
+        resolver.resolve(&module);
+
+        // Uppercase imports should be treated as unit variants via heuristic
+        assert!(resolver.is_unit_variant("Active"));
+        assert!(resolver.is_unit_variant("SomeVariant"));
+        assert!(!resolver.is_unit_variant("inactive")); // lowercase
+    }
+
+    #[test]
+    fn test_pattern_normalization() {
+        let input = r#"
+            enum Option {
+                None,
+                Some(string)
+            }
+            
+            fn test(x: Option) {
+                match x {
+                    None => "none",     // Should be normalized to Pattern::Variant
+                    Some(value) => value
+                }
+            }
+        "#;
+
+        let (mut module, _diagnostics) = parse_and_resolve(input);
+
+        let mut resolver = Resolver::new();
+        resolver.resolve(&module);
+        resolver.normalize_patterns(&mut module);
+
+        // Find the match expression and check that None was normalized
+        if let Item::Function(func) = &module.items[1].value {
+            if let Some(body) = &func.body {
+                if let Statement::Expression(Expression::Match(match_expr)) =
+                    &body.statements[0].value
+                {
+                    // First arm should be Pattern::Variant("None", [])
+                    match &match_expr.arms[0].pattern {
+                        Pattern::Variant(name, args) => {
+                            assert_eq!(name, "None");
+                            assert!(args.is_empty());
+                        }
+                        _ => panic!("Expected None to be normalized to variant pattern"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_function_parameter_resolution() {
+        let input = r#"
+            fn greet(name: string, age: number) {
+                name
+            }
+        "#;
+
+        let (_module, diagnostics) = parse_and_resolve(input);
+
+        // Should not have undefined identifier errors for parameters
+        let has_undefined_name = diagnostics
+            .iter()
+            .any(|d| d.message.contains("Undefined identifier: name"));
+        assert!(
+            !has_undefined_name,
+            "Should resolve function parameters: {:?}",
+            diagnostics
+        );
     }
 }

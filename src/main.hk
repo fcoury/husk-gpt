@@ -1,8 +1,0 @@
-enum Msg { 
-    Quit, 
-    Write(string) 
-}
-
-pub fn main() {
-  let m = Msg::Write("Husk")
-}

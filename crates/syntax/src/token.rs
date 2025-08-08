@@ -4,10 +4,10 @@ pub enum Token {
     String(String),
     Number(String),
     Bool(bool),
-    
+
     // Identifiers
     Ident(String),
-    
+
     // Keywords
     Fn,
     Let,
@@ -29,7 +29,7 @@ pub enum Token {
     Newtype,
     Nominal,
     Extern,
-    
+
     // Punctuation
     LeftParen,    // (
     RightParen,   // )
@@ -67,7 +67,7 @@ pub enum Token {
     Underscore,   // _
     As,           // as
     From,         // from
-    
+
     // Special
     Newline,
     Eof,

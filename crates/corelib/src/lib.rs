@@ -109,13 +109,14 @@ use syntax::ast::*;
 pub fn get_prelude_module() -> Module {
     // For now, return an empty module
     // In a full implementation, we would parse PRELUDE_SOURCE
-    Module {
-        items: Vec::new(),
-    }
+    Module { items: Vec::new() }
 }
 
 pub fn is_builtin_type(name: &str) -> bool {
-    matches!(name, "Option" | "Result" | "Vec" | "Map" | "string" | "number" | "bool")
+    matches!(
+        name,
+        "Option" | "Result" | "Vec" | "Map" | "string" | "number" | "bool"
+    )
 }
 
 pub fn get_builtin_type_info(name: &str) -> Option<&'static str> {
