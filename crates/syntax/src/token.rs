@@ -64,6 +64,9 @@ pub enum Token {
     Not,          // !
     Hash,         // #
     At,           // @
+    Underscore,   // _
+    As,           // as
+    From,         // from
     
     // Special
     Newline,
@@ -93,6 +96,8 @@ impl Token {
             "newtype" => Some(Token::Newtype),
             "nominal" => Some(Token::Nominal),
             "extern" => Some(Token::Extern),
+            "as" => Some(Token::As),
+            "from" => Some(Token::From),
             "true" => Some(Token::Bool(true)),
             "false" => Some(Token::Bool(false)),
             _ => None,

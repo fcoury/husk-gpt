@@ -3,6 +3,7 @@ members = [
   "crates/huskc",         # CLI
   "crates/syntax",        # lexer+parser (AST)
   "crates/diagnostics",   # spans, errors, reporter
+  "crates/resolver",      # name resolution and symbol table
   "crates/types",         # type IR + checker
   "crates/ts_host",       # V8 + TypeScript bridge (deno_core)
   "crates/interop",       # import .d.ts into Husk IR

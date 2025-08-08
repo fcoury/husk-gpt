@@ -7,6 +7,7 @@ edition = "2024"
 clap = { version = "4", features = ["derive"] }
 diagnostics = { path = "../diagnostics" }
 syntax = { path = "../syntax" }
+resolver = { path = "../resolver" }
 types = { path = "../types" }
 emit_js = { path = "../emit_js" }
 emit_dts = { path = "../emit_dts" }

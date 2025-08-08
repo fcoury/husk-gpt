@@ -1,0 +1,17 @@
+pub enum Event { 
+    Click { x: string, y: string }, 
+    KeyPress(string),
+    Quit
+}
+
+pub fn handle_event(e: Event) -> string {
+  match e {
+    Click { x: px, y: py } => px,
+    KeyPress(key) => key,
+    Quit => "quit",
+  }
+}
+
+pub fn main() {
+    console.log("record enum test");
+}

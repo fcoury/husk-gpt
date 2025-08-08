@@ -1,0 +1,17 @@
+import { add, multiply, MathOp } from "./math.hk";
+
+export fn calculate(op: MathOp) -> number {
+  match op {
+    Add(a, b) => add(a, b),
+    Multiply(a, b) => multiply(a, b),
+    Divide { numerator: n, denominator: d } => n / d,
+  }
+}
+
+pub fn main() -> number {
+  let result1 = calculate(MathOp::Add(5, 3));
+  let result2 = calculate(MathOp::Multiply(4, 7));
+  let result3 = calculate(MathOp::Divide({ numerator: 10, denominator: 2 }));
+  
+  result1 + result2 + result3
+}

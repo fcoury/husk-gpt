@@ -1,0 +1,15 @@
+import { add, subtract } from "./math.hk"
+import * as Utils from "./utils.hk"
+import defaultExport from "./default.hk"
+import MyDefault, { named1, named2 } from "./mixed.hk"
+
+export fn calculate(x: number, y: number) -> number {
+    add(x, y)
+}
+
+export default fn main() {
+    console.log("Testing imports!")
+}
+
+export { calculate as calc }
+export * from "./helper.hk"

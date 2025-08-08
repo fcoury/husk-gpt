@@ -1,0 +1,13 @@
+pub fn add(a: number, b: number) -> number {
+  a + b
+}
+
+pub fn multiply(a: number, b: number) -> number {
+  a * b
+}
+
+pub enum MathOp {
+  Add(number, number),
+  Multiply(number, number),
+  Divide { numerator: number, denominator: number }
+}

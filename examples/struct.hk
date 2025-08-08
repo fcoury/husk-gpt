@@ -1,0 +1,13 @@
+pub struct User {
+    pub id: string,
+    pub name: string,
+}
+
+pub fn create_user() -> User {
+    "stub function for now"
+}
+
+pub fn main() {
+    let user = create_user();
+    console.log("struct test");
+}

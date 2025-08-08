@@ -92,6 +92,7 @@ impl Lexer {
             '.' => { self.advance(); Some(Token::Dot) },
             '#' => { self.advance(); Some(Token::Hash) },
             '@' => { self.advance(); Some(Token::At) },
+            '_' => { self.advance(); Some(Token::Underscore) },
             ':' => {
                 self.advance();
                 if self.current_char() == Some(':') {

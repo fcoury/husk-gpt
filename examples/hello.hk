@@ -1,0 +1,16 @@
+pub enum Msg { 
+    Quit, 
+    Write(string) 
+}
+
+pub fn handle(m: Msg) -> string {
+  match m {
+    Quit => "bye",
+    Write(s) => s,
+  }
+}
+
+pub fn main() {
+  let msg = Msg::Write("Husk!");
+  console.log(handle(msg));
+}

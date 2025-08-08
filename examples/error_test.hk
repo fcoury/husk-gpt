@@ -1,0 +1,5 @@
+fn test() {
+    let x = unknown_variable;
+    let y = SomeEnum::InvalidVariant(1, 2, 3);
+    unknown_function(x, y);
+}

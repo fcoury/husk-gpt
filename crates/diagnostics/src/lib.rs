@@ -31,6 +31,7 @@ pub enum ErrorCode {
     TypeError,
     UnresolvedName,
     DuplicateDefinition,
+    NameResolutionError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

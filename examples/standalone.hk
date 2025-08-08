@@ -1,0 +1,35 @@
+// Test standalone functionality without external dependencies
+
+pub enum TestEnum {
+    Simple,
+    Tuple(number, string),  
+    Record { x: number, y: string },
+}
+
+pub fn process_value(val: TestEnum) -> string {
+  match val {
+    Simple => "simple",
+    Tuple(a, b) => b,
+    Record { x: n, y: s } => s,
+  }
+}
+
+pub fn test_console() -> string {
+  let msg = "Hello from Husk!";
+  console.log(msg);
+  msg
+}
+
+pub fn main() -> number {
+  let v1 = TestEnum::Simple;
+  let v2 = TestEnum::Tuple(42, "test");
+  let v3 = TestEnum::Record({ x: 10, y: "world" });
+  
+  let result1 = process_value(v1);
+  let result2 = process_value(v2);
+  let result3 = process_value(v3);
+  
+  test_console();
+  
+  42
+}

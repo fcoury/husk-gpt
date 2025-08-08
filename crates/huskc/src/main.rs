@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::{fs, path::Path};
 use diagnostics::Reporter;
 use syntax::{Lexer, Parser as HuskParser};
+use resolver::Resolver;
 
 #[derive(Parser)]
 #[command(name = "huskc")]
@@ -73,6 +74,22 @@ fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn s
     
     // Create output directory
     fs::create_dir_all(out_dir)?;
+    
+    // Name resolution
+    let mut resolver = Resolver::new();
+    let resolution_diagnostics = resolver.resolve(&module);
+    
+    // Report resolution diagnostics
+    for diagnostic in resolution_diagnostics {
+        reporter.report(diagnostic);
+    }
+    
+    if reporter.has_errors() {
+        reporter.print_all();
+        return Err("Name resolution failed with errors".into());
+    }
+    
+    println!("Name resolution complete!");
     
     // TODO: Typecheck (stub)
     println!("Typechecking... (stub)");
