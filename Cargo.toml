@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "crates/huskc",         # CLI
+  "crates/syntax",        # lexer+parser (AST)
+  "crates/diagnostics",   # spans, errors, reporter
+  "crates/types",         # type IR + checker
+  "crates/ts_host",       # V8 + TypeScript bridge (deno_core)
+  "crates/interop",       # import .d.ts into Husk IR
+  "crates/emit_js",       # JS emitter
+  "crates/emit_dts",      # .d.ts emitter
+  "crates/corelib",       # prelude: Option, Result, Vec,...
+]
+resolver = "2"

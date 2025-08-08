@@ -1,0 +1,74 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build outputs
+/dist/
+/build/
+/out/
+
+# Node.js (for testing generated JS)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Test outputs
+/test-output/
+*.test.js
+*.test.d.ts
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# V8 and Deno artifacts
+.deno/
+v8/
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Backup files
+*.bak
+*.backup
+
+# Coverage reports
+/coverage/
+*.lcov
+
+# Documentation build
+/docs/build/
+
+# Vendor dependencies (if we add them later)
+/vendor/
