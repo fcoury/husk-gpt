@@ -9,6 +9,7 @@
 use diagnostics::{Diagnostic, ErrorCode, Span};
 use std::collections::{HashMap, HashSet};
 use syntax::ast::*;
+use types::{TypeChecker, Type as TypeIR, PrimitiveType as TypeIRPrimitive, EnumVariant as TypeIRVariant};
 use syntax::ast::{Export, ImportClause};
 
 /// Represents a constructor pattern for exhaustiveness checking
@@ -36,6 +37,7 @@ struct MatchAnalysis {
 pub struct Resolver {
     scopes: Vec<Scope>,
     diagnostics: Vec<Diagnostic>,
+    type_checker: TypeChecker,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +92,7 @@ impl Resolver {
         let mut resolver = Self {
             scopes: vec![Scope::new()], // Global scope
             diagnostics: Vec::new(),
+            type_checker: TypeChecker::new(),
         };
 
         // Seed global scope with built-in symbols
@@ -199,6 +202,21 @@ impl Resolver {
                     span,
                 };
                 self.declare_symbol(enum_symbol);
+
+                // Register enum in type checker for better diagnostics
+                let type_variants: Vec<TypeIRVariant> = enm.variants.iter().map(|v| {
+                    let field_types: Vec<TypeIR> = v.fields.iter().map(|field| {
+                        // Convert AST Type to Type IR
+                        self.ast_type_to_type_ir(field)
+                    }).collect();
+                    
+                    TypeIRVariant {
+                        name: v.name.clone(),
+                        field_types,
+                    }
+                }).collect();
+                
+                self.type_checker.register_enum(enm.name.clone(), type_variants);
 
                 // Declare each variant as a constructor function
                 for variant in &enm.variants {
@@ -533,6 +551,54 @@ impl Resolver {
                     self.resolve_pattern(pattern, span);
                 }
             }
+            Pattern::QualifiedVariant {
+                enum_name,
+                variant,
+                patterns,
+            } => {
+                // Look for the enum type first
+                if let Some(enum_symbol) = self.lookup_symbol(enum_name) {
+                    match &enum_symbol.kind {
+                        SymbolKind::Type { kind: TypeKind::Enum(variants) } => {
+                            // Find the specific variant
+                            if let Some(variant_def) = variants.iter().find(|v| v.name == *variant) {
+                                let expected_arity = variant_def.fields.len();
+
+                                if patterns.len() != expected_arity {
+                                    self.error_at(
+                                        span,
+                                        format!(
+                                            "Pattern for variant '{}::{}' expects {} arguments, got {}",
+                                            enum_name,
+                                            variant,
+                                            expected_arity,
+                                            patterns.len()
+                                        ),
+                                    );
+                                }
+                            } else {
+                                self.error_at(
+                                    span,
+                                    format!("Variant '{}' is not a member of enum '{}'", variant, enum_name),
+                                );
+                            }
+                        }
+                        _ => {
+                            self.error_at(
+                                span,
+                                format!("'{}' is not an enum type", enum_name),
+                            );
+                        }
+                    }
+                } else {
+                    self.error_at(span, format!("Unknown enum type '{}'", enum_name));
+                }
+
+                // Resolve nested patterns
+                for pattern in patterns {
+                    self.resolve_pattern(pattern, span);
+                }
+            }
             Pattern::Tuple(patterns) => {
                 for pattern in patterns {
                     self.resolve_pattern(pattern, span);
@@ -703,6 +769,11 @@ impl Resolver {
                     self.normalize_pattern(pattern);
                 }
             }
+            Pattern::QualifiedVariant { patterns, .. } => {
+                for pattern in patterns {
+                    self.normalize_pattern(pattern);
+                }
+            }
             Pattern::Tuple(patterns) => {
                 for pattern in patterns {
                     self.normalize_pattern(pattern);
@@ -794,6 +865,10 @@ impl Resolver {
                 name: name.clone(),
                 arity: patterns.len(),
             },
+            Pattern::QualifiedVariant { variant, patterns, .. } => ConstructorPattern::Variant {
+                name: variant.clone(),
+                arity: patterns.len(),
+            },
             Pattern::Literal(lit) => {
                 let lit_str = match lit {
                     Literal::String(s) => format!("\"{}\"", s),
@@ -845,6 +920,7 @@ impl Resolver {
     }
 
     /// Find missing patterns to make the match exhaustive
+    /// Improved version that restricts analysis to same tag namespace
     fn find_missing_patterns(&self, covered: &[ConstructorPattern]) -> Vec<ConstructorPattern> {
         // If we have a wildcard, the match is exhaustive
         if covered
@@ -854,17 +930,20 @@ impl Resolver {
             return Vec::new();
         }
 
-        let mut missing = Vec::new();
+        // Only analyze exhaustiveness for clear enum matches
+        // Collect variants and group them by enum, but only suggest missing variants
+        // from enums that are clearly being matched (same tag namespace)
+        let mut enum_variants_covered = HashMap::new();
+        let mut all_covered_variants = Vec::new();
 
-        // For now, we'll do a simple analysis:
-        // If we see variant patterns, check if all variants of that enum are covered
-        let mut enum_variants = HashMap::new();
-
+        // First pass: collect all variant patterns and their enums
         for pattern in covered {
             if let ConstructorPattern::Variant { name, arity: _ } = pattern {
+                all_covered_variants.push(name.clone());
+                
                 // Try to find the enum this variant belongs to
                 if let Some(enum_name) = self.find_enum_for_variant(name) {
-                    enum_variants
+                    enum_variants_covered
                         .entry(enum_name)
                         .or_insert_with(Vec::new)
                         .push(name.clone());
@@ -872,8 +951,20 @@ impl Resolver {
             }
         }
 
-        // Check if any enums have missing variants
-        for (enum_name, covered_variants) in enum_variants {
+        // Only proceed with exhaustiveness analysis if we have a clear single enum being matched
+        // or if all covered variants belong to the same enum(s)
+        if enum_variants_covered.is_empty() {
+            return Vec::new(); // No variants found, can't analyze exhaustiveness
+        }
+
+        // If we have mixed enums, be conservative and only suggest missing variants
+        // from enums where we've seen at least 2 variants (indicating intentional matching)
+        // or if there's only one enum being matched
+        let mut missing = Vec::new();
+        
+        if enum_variants_covered.len() == 1 {
+            // Single enum case - suggest missing variants
+            let (enum_name, covered_variants) = enum_variants_covered.into_iter().next().unwrap();
             if let Some(all_variants) = self.get_enum_variants(&enum_name) {
                 for variant in all_variants {
                     if !covered_variants.contains(&variant.name) {
@@ -881,6 +972,25 @@ impl Resolver {
                             name: variant.name.clone(),
                             arity: variant.fields.len(),
                         });
+                    }
+                }
+            }
+        } else {
+            // Multiple enums case - only suggest missing variants from enums with multiple covered variants
+            // This avoids suggesting unrelated variants when different enums are mixed
+            for (enum_name, covered_variants) in enum_variants_covered {
+                // Only analyze enums where we've covered multiple variants
+                // This indicates intentional exhaustive matching of that specific enum
+                if covered_variants.len() >= 2 {
+                    if let Some(all_variants) = self.get_enum_variants(&enum_name) {
+                        for variant in all_variants {
+                            if !covered_variants.contains(&variant.name) {
+                                missing.push(ConstructorPattern::Variant {
+                                    name: variant.name.clone(),
+                                    arity: variant.fields.len(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -934,6 +1044,41 @@ impl Resolver {
             ConstructorPattern::Literal(lit) => lit.clone(),
             ConstructorPattern::Identifier(name) => name.clone(),
         }
+    }
+
+    /// Convert AST Type to Type IR for type checker
+    fn ast_type_to_type_ir(&self, ast_type: &Type) -> TypeIR {
+        match ast_type {
+            Type::Primitive(p) => match p {
+                PrimitiveType::String => TypeIR::Primitive(TypeIRPrimitive::String),
+                PrimitiveType::Number => TypeIR::Primitive(TypeIRPrimitive::Number),
+                PrimitiveType::Bool => TypeIR::Primitive(TypeIRPrimitive::Bool),
+                PrimitiveType::Void => TypeIR::Unknown, // Void doesn't have a direct mapping
+            },
+            Type::Path(name) => {
+                // For now, treat custom types as unknown - could be enhanced to look up enum types
+                if name == "string" {
+                    TypeIR::Primitive(TypeIRPrimitive::String)
+                } else if name == "number" {
+                    TypeIR::Primitive(TypeIRPrimitive::Number)
+                } else if name == "bool" {
+                    TypeIR::Primitive(TypeIRPrimitive::Bool)
+                } else {
+                    TypeIR::Unknown
+                }
+            },
+            Type::Tuple(fields) => {
+                let field_types = fields.iter().map(|f| self.ast_type_to_type_ir(f)).collect();
+                TypeIR::Tuple(field_types)
+            },
+            // For now, treat other complex types as unknown
+            _ => TypeIR::Unknown,
+        }
+    }
+
+    /// Get access to the type checker for diagnostics
+    pub fn type_checker(&self) -> &TypeChecker {
+        &self.type_checker
     }
 
     /// Return the set of known enum variant names visible in current scopes.
@@ -1094,6 +1239,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_type_ir_integration() {
+        let input = r#"
+            pub enum MyResult {
+                Success(string),
+                Error(number)
+            }
+        "#;
+
+        let (module, diagnostics) = parse_and_resolve(input);
+        
+        // Should compile successfully
+        assert!(diagnostics.is_empty(), "Expected no errors but got: {:?}", diagnostics);
+        
+        // Verify the enum was registered in the type checker
+        let resolver = {
+            let mut resolver = Resolver::new();
+            let _ = resolver.resolve(&module);
+            resolver
+        };
+        
+        // Check that the enum is available in the type checker
+        let type_checker = resolver.type_checker();
+        let enum_type = type_checker.get_enum_type("MyResult");
+        assert!(enum_type.is_some(), "MyResult enum should be registered in type checker");
+        
+        // Check variant arities are tracked
+        assert_eq!(type_checker.get_variant_arity("MyResult", "Success"), Some(1));
+        assert_eq!(type_checker.get_variant_arity("MyResult", "Error"), Some(1));
     }
 
     #[test]

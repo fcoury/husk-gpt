@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 syntax = { path = "../syntax" }
 diagnostics = { path = "../diagnostics" }
+types = { path = "../types" }
