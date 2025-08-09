@@ -66,13 +66,21 @@ impl PatternCheck {
 
                 // Add exact arity check for non-empty variant patterns
                 if !patterns.is_empty() {
-                    // For variants, we need exact structural validation:
-                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
-                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    // For variants, ensure object/non-null and exact structural validation:
+                    // - All expected indices exist as own props
+                    // - Next index must NOT exist
+                    test_conditions.push(format!("typeof {} === 'object' && {} !== null", scrutinee_var, scrutinee_var));
                     let expected_indices: Vec<String> = (0..patterns.len())
-                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .map(|i| format!(
+                            "Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                            scrutinee_var, i
+                        ))
                         .collect();
-                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    let no_extra_check = format!(
+                        "!Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                        scrutinee_var,
+                        patterns.len()
+                    );
                     test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
                 }
 
@@ -107,13 +115,19 @@ impl PatternCheck {
 
                 // Add exact arity check for non-empty variant patterns
                 if !patterns.is_empty() {
-                    // For variants, we need exact structural validation:
-                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
-                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    // Same object/non-null + hasOwnProperty checks as unqualified variants
+                    test_conditions.push(format!("typeof {} === 'object' && {} !== null", scrutinee_var, scrutinee_var));
                     let expected_indices: Vec<String> = (0..patterns.len())
-                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .map(|i| format!(
+                            "Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                            scrutinee_var, i
+                        ))
                         .collect();
-                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    let no_extra_check = format!(
+                        "!Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                        scrutinee_var,
+                        patterns.len()
+                    );
                     test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
                 }
 
@@ -149,13 +163,18 @@ impl PatternCheck {
 
                 // Add exact arity check for tuples
                 if !patterns.is_empty() {
-                    // For tuples, we need exact structural validation:
-                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
-                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    // Exact structural validation with hasOwnProperty
                     let expected_indices: Vec<String> = (0..patterns.len())
-                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .map(|i| format!(
+                            "Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                            scrutinee_var, i
+                        ))
                         .collect();
-                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    let no_extra_check = format!(
+                        "!Object.prototype.hasOwnProperty.call({}, \"{}\")",
+                        scrutinee_var,
+                        patterns.len()
+                    );
                     test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
                 }
 
@@ -859,13 +878,20 @@ mod tests {
         let output = emit(&module);
 
         // Should have nested pattern conditions with proper arity checks
+        // Top-level Ok arity (exactly one field)
         assert!(output.contains(
-            "_s.tag === \"Ok\" && typeof _s[0] !== 'undefined' && _s[0].tag === \"Some\""
+            "_s.tag === \"Ok\" && typeof _s === 'object' && _s !== null && (Object.prototype.hasOwnProperty.call(_s, \"0\")) && !Object.prototype.hasOwnProperty.call(_s, \"1\")"
         ));
+        // Nested Some arity (exactly one field)
         assert!(output.contains(
-            "_s.tag === \"Ok\" && typeof _s[0] !== 'undefined' && _s[0].tag === \"None\""
+            "_s[0].tag === \"Some\" && typeof _s[0] === 'object' && _s[0] !== null && (Object.prototype.hasOwnProperty.call(_s[0], \"0\")) && !Object.prototype.hasOwnProperty.call(_s[0], \"1\")"
         ));
-        assert!(output.contains("_s.tag === \"Err\" && typeof _s[0] !== 'undefined'"));
+        // Nested None arity (unit)
+        assert!(output.contains("_s[0].tag === \"None\""));
+        // Err arity (exactly one field)
+        assert!(output.contains(
+            "_s.tag === \"Err\" && typeof _s === 'object' && _s !== null && (Object.prototype.hasOwnProperty.call(_s, \"0\")) && !Object.prototype.hasOwnProperty.call(_s, \"1\")"
+        ));
 
         // Should bind nested values correctly
         assert!(output.contains("const value = _s[0][0];"));
@@ -888,7 +914,10 @@ mod tests {
 
         // Tuple patterns should check for objects, not arrays
         assert!(output.contains("typeof _s === 'object' && _s !== null && !Array.isArray(_s)"));
-        assert!(output.contains("typeof _s[1] !== 'undefined'"));
+        // Exact arity: fields 0 and 1 exist, field 2 does not
+        assert!(output.contains(
+            "(Object.prototype.hasOwnProperty.call(_s, \"0\") && Object.prototype.hasOwnProperty.call(_s, \"1\")) && !Object.prototype.hasOwnProperty.call(_s, \"2\")"
+        ));
         assert!(output.contains("_s[1] === \"center\""));
         assert!(output.contains("_s[0] === 0"));
     }
@@ -902,5 +931,148 @@ mod tests {
             "./components/button.js"
         );
         assert_eq!(rewrite_import_path_for_js("react"), "react"); // Package imports unchanged
+    }
+
+    #[test]
+    fn test_switch_optimization_triggers_for_unit_variants() {
+        // Switch should be used when all patterns are unit variants, no guards, no wildcards
+        let input = r#"
+            enum Status { Active, Inactive, Pending }
+            fn get_code(status: Status) -> number {
+                match status {
+                    Active => 1,
+                    Inactive => 2,
+                    Pending => 3
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use switch statement
+        assert!(output.contains("switch (_s.tag)"), "Expected switch statement but got: {}", output);
+        assert!(output.contains("case \"Active\":"), "Expected case for Active variant");
+        assert!(output.contains("case \"Inactive\":"), "Expected case for Inactive variant");
+        assert!(output.contains("case \"Pending\":"), "Expected case for Pending variant");
+        
+        // Should not have if-else chains for variant matching
+        assert!(!output.contains("if (_s.tag === \"Active\")"), "Should not have if-else for variants when switch is used");
+    }
+
+    #[test]
+    fn test_switch_fallback_with_guards() {
+        // Should fallback to if-else when guards are present
+        let input = r#"
+            enum Status { Active, Inactive }
+            fn check_status(status: Status) -> string {
+                match status {
+                    Active => "running",
+                    Inactive if true => "stopped"
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use if-else chain, not switch
+        assert!(!output.contains("switch"), "Should not use switch when guards are present");
+        assert!(output.contains("if (_s.tag === \"Active\")"), "Should use if-else chain for variants with guards");
+        assert!(output.contains("if (_s.tag === \"Inactive\")"), "Should use if-else for guarded patterns");
+        assert!(output.contains("if (true)"), "Should include guard condition");
+    }
+
+    #[test]
+    fn test_switch_fallback_with_wildcards() {
+        // Should fallback to if-else when wildcard is present
+        let input = r#"
+            enum Status { Active, Inactive, Pending }
+            fn simplify_status(status: Status) -> string {
+                match status {
+                    Active => "active",
+                    _ => "other"
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use if-else chain, not switch
+        assert!(!output.contains("switch"), "Should not use switch when wildcard is present");
+        assert!(output.contains("if (_s.tag === \"Active\")"), "Should use if-else for specific variant");
+        assert!(output.contains("if (true)"), "Should use if (true) for wildcard pattern");
+    }
+
+    #[test]
+    fn test_switch_fallback_with_payload_variants() {
+        // Should fallback to if-else when variants have payloads
+        let input = r#"
+            enum Result { Ok(string), Err(string) }
+            fn handle_result(result: Result) -> string {
+                match result {
+                    Ok(value) => value,
+                    Err(error) => "failed: " + error
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use if-else chain, not switch
+        assert!(!output.contains("switch"), "Should not use switch when variants have payloads");
+        assert!(output.contains("if (_s.tag === \"Ok\""), "Should use if-else for payload variant");
+        assert!(output.contains("if (_s.tag === \"Err\""), "Should use if-else for payload variant");
+        assert!(output.contains("const value = _s[0]"), "Should extract payload");
+        assert!(output.contains("const error = _s[0]"), "Should extract error payload");
+    }
+
+    #[test]
+    fn test_switch_fallback_with_mixed_patterns() {
+        // Should fallback to if-else when mixing variant and non-variant patterns
+        let input = r#"
+            fn handle_value(value: number) -> string {
+                match value {
+                    0 => "zero",
+                    1 => "one",
+                    _ => "other"
+                }
+            }
+        "#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use if-else chain, not switch
+        assert!(!output.contains("switch"), "Should not use switch for literal patterns");
+        assert!(output.contains("if (_s === 0)"), "Should use if-else for literal matching");
+        assert!(output.contains("if (_s === 1)"), "Should use if-else for literal matching");
+        assert!(output.contains("if (true)"), "Should use if (true) for wildcard");
+    }
+
+    #[test]
+    fn test_switch_with_qualified_variants() {
+        // Switch should work with qualified variant patterns too
+        let input = r##"
+            enum Color { Red, Green, Blue }
+            fn get_hex(color: Color) -> string {
+                match color {
+                    Color::Red => "#FF0000",
+                    Color::Green => "#00FF00",
+                    Color::Blue => "#0000FF"
+                }
+            }
+        "##;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Should use switch statement even with qualified variants
+        assert!(output.contains("switch (_s.tag)"), "Expected switch statement for qualified variants");
+        assert!(output.contains("case \"Red\":"), "Expected case for Red variant");
+        assert!(output.contains("case \"Green\":"), "Expected case for Green variant");
+        assert!(output.contains("case \"Blue\":"), "Expected case for Blue variant");
     }
 }
