@@ -69,17 +69,14 @@ fn emit_function(func: &Function) -> String {
 fn emit_enum(enm: &Enum) -> String {
     let mut output = String::new();
     let mut variants = Vec::new();
+    let mut namespace_properties = Vec::new();
 
-    // Generate constructor function declarations and type variants
+    // Generate type variants and namespace properties (without individual exports)
     for variant in &enm.variants {
         if variant.fields.is_empty() {
             // Unit variant
             variants.push(format!("{{ tag: \"{}\" }}", variant.name));
-            output.push_str(&format!(
-                "export declare const {}: {{ tag: \"{}\" }};\n",
-                format!("{}_{}", enm.name, variant.name),
-                variant.name
-            ));
+            namespace_properties.push(format!("{}: {{ tag: \"{}\" }}", variant.name, variant.name));
         } else {
             // Tuple variant
             let fields = variant
@@ -98,9 +95,11 @@ fn emit_enum(enm: &Enum) -> String {
                 .map(|(i, ty)| format!("arg{}: {}", i, emit_type(ty)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            output.push_str(&format!(
-                "export declare function {}({}): {{ tag: \"{}\"; {} }};\n",
-                format!("{}_{}", enm.name, variant.name),
+            
+            // Function type for the constructor in the namespace
+            namespace_properties.push(format!(
+                "{}({}): {{ tag: \"{}\"; {} }}",
+                variant.name,
                 params,
                 variant.name,
                 fields
@@ -108,20 +107,19 @@ fn emit_enum(enm: &Enum) -> String {
         }
     }
 
-    // Add enum type and namespace
+    // Add enum type union
     output.push_str(&format!(
         "export type {} = {};\n",
         enm.name,
         variants.join(" | ")
     ));
+    
+    // Add namespace with constructor functions and constants
+    // This is the only export - no individual Status_Active exports
     output.push_str(&format!(
         "export declare const {}: {{ {} }};\n",
         enm.name,
-        enm.variants
-            .iter()
-            .map(|v| format!("{}: typeof {}", v.name, format!("{}_{}", enm.name, v.name)))
-            .collect::<Vec<_>>()
-            .join(", ")
+        namespace_properties.join("; ")
     ));
 
     output
