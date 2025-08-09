@@ -1,0 +1,19 @@
+enum Option {
+    None,
+    Some(string)
+}
+
+enum Result {
+    Ok(Option),
+    Err(string)
+}
+
+fn process_result(result: Result) {
+    match result {
+        Ok(option) => match option {
+            Some(value) => value,
+            None => "empty"
+        },
+        Err(message) => message
+    }
+}

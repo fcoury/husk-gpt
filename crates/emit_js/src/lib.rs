@@ -1,5 +1,6 @@
 #![allow(clippy::uninlined_format_args, clippy::unnecessary_map_or)]
 
+use interop::path_rewriting::rewrite_import_path_for_js;
 use std::collections::HashSet;
 use syntax::ast::*;
 use syntax::ast::{Export, ImportClause};
@@ -616,49 +617,10 @@ fn emit_import(import: &Import) -> String {
         }
     };
 
-    let rewritten_path = rewrite_import_path(&import.path);
+    let rewritten_path = rewrite_import_path_for_js(&import.path);
     format!("import {} from \"{}\";", import_clause, rewritten_path)
 }
 
-fn rewrite_import_path(path: &str) -> String {
-    // If it's a relative path (./ or ../), add .js extension
-    if path.starts_with("./") || path.starts_with("../") {
-        // Check if it already has an extension
-        if path.ends_with(".hk") {
-            // Replace .hk with .js for Husk source files
-            path.replace(".hk", ".js")
-        } else if path.ends_with('/') {
-            // Directory import, leave as-is
-            path.to_string()
-        } else if path
-            .rfind('.')
-            .map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0))
-        {
-            // No extension after the last slash, add .js
-            format!("{}.js", path)
-        } else {
-            // Has extension, keep as-is
-            path.to_string()
-        }
-    } else if path.starts_with('/') {
-        // Absolute paths - add .js extension if needed
-        if path.ends_with(".hk") {
-            path.replace(".hk", ".js")
-        } else if path.ends_with('/') {
-            path.to_string()
-        } else if path
-            .rfind('.')
-            .map_or(true, |dot_pos| dot_pos < path.rfind('/').unwrap_or(0))
-        {
-            format!("{}.js", path)
-        } else {
-            path.to_string()
-        }
-    } else {
-        // Package imports (no ./ or ../) - leave as-is for node_modules
-        path.to_string()
-    }
-}
 
 fn emit_export(export: &Export, known_variants: &HashSet<String>) -> String {
     match export {
@@ -749,11 +711,11 @@ fn emit_export(export: &Export, known_variants: &HashSet<String>) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let rewritten_path = rewrite_import_path(path);
+            let rewritten_path = rewrite_import_path_for_js(path);
             format!("export {{ {} }} from \"{}\";", names, rewritten_path)
         }
         Export::All(path) => {
-            let rewritten_path = rewrite_import_path(path);
+            let rewritten_path = rewrite_import_path_for_js(path);
             format!("export * from \"{}\";", rewritten_path)
         }
     }
@@ -865,12 +827,12 @@ mod tests {
 
     #[test]
     fn test_import_path_rewriting() {
-        assert_eq!(rewrite_import_path("./module.hk"), "./module.js");
-        assert_eq!(rewrite_import_path("../utils.hk"), "../utils.js");
+        assert_eq!(rewrite_import_path_for_js("./module.hk"), "./module.js");
+        assert_eq!(rewrite_import_path_for_js("../utils.hk"), "../utils.js");
         assert_eq!(
-            rewrite_import_path("./components/button"),
+            rewrite_import_path_for_js("./components/button"),
             "./components/button.js"
         );
-        assert_eq!(rewrite_import_path("react"), "react"); // Package imports unchanged
+        assert_eq!(rewrite_import_path_for_js("react"), "react"); // Package imports unchanged
     }
 }

@@ -72,6 +72,8 @@ enum SymbolKind {
     },
     Import {
         path: String,
+        original_name: String,  // The name as it appears in the source module
+        imported_as: String,    // The name as it appears in this module (alias or original)
     },
 }
 
@@ -236,9 +238,11 @@ impl Resolver {
                         for item in items {
                             let name = item.alias.as_ref().unwrap_or(&item.name).clone();
                             let symbol = Symbol {
-                                name,
+                                name: name.clone(),
                                 kind: SymbolKind::Import {
                                     path: import.path.clone(),
+                                    original_name: item.name.clone(),
+                                    imported_as: name.clone(),
                                 },
                                 span,
                             };
@@ -250,6 +254,8 @@ impl Resolver {
                             name: name.clone(),
                             kind: SymbolKind::Import {
                                 path: import.path.clone(),
+                                original_name: "*".to_string(), // Namespace import
+                                imported_as: name.clone(),
                             },
                             span,
                         };
@@ -260,6 +266,8 @@ impl Resolver {
                             name: name.clone(),
                             kind: SymbolKind::Import {
                                 path: import.path.clone(),
+                                original_name: "default".to_string(), // Default import
+                                imported_as: name.clone(),
                             },
                             span,
                         };
@@ -271,6 +279,8 @@ impl Resolver {
                             name: default.clone(),
                             kind: SymbolKind::Import {
                                 path: import.path.clone(),
+                                original_name: "default".to_string(),
+                                imported_as: default.clone(),
                             },
                             span,
                         };
@@ -280,9 +290,11 @@ impl Resolver {
                         for item in named {
                             let name = item.alias.as_ref().unwrap_or(&item.name).clone();
                             let symbol = Symbol {
-                                name,
+                                name: name.clone(),
                                 kind: SymbolKind::Import {
                                     path: import.path.clone(),
+                                    original_name: item.name.clone(),
+                                    imported_as: name.clone(),
                                 },
                                 span,
                             };
@@ -588,10 +600,10 @@ impl Resolver {
                     SymbolKind::EnumVariant { fields, .. } => {
                         return fields.is_empty();
                     }
-                    SymbolKind::Import { .. } => {
-                        // Heuristic: assume imported uppercase identifiers are unit variants
-                        // This is not foolproof but helps with basic cross-module scenarios
-                        return name.chars().next().map_or(false, |c| c.is_uppercase());
+                    SymbolKind::Import { original_name, .. } => {
+                        // Improved heuristic: use the original name to determine if it's likely a variant
+                        // Original names starting with uppercase are likely enum variants or type names
+                        return original_name.chars().next().map_or(false, |c| c.is_uppercase());
                     }
                     _ => return false,
                 }
@@ -934,10 +946,10 @@ impl Resolver {
                     SymbolKind::EnumVariant { .. } => {
                         set.insert(name.clone());
                     }
-                    SymbolKind::Import { .. } => {
-                        // Heuristic: if an import name starts with uppercase, it might be a variant
-                        // This is not foolproof but helps with basic cross-module scenarios
-                        if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    SymbolKind::Import { original_name, .. } => {
+                        // Improved heuristic: use the original name to determine if it's likely a variant
+                        // Original names starting with uppercase are likely enum variants or type names
+                        if original_name.chars().next().map_or(false, |c| c.is_uppercase()) {
                             set.insert(name.clone());
                         }
                     }

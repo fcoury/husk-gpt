@@ -1,8 +1,9 @@
 [package]
 name = "emit_js"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 syntax = { path = "../syntax" }
 diagnostics = { path = "../diagnostics" }
+interop = { path = "../interop" }

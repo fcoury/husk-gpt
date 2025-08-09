@@ -10,6 +10,9 @@ use syntax::{Lexer, Parser as HuskParser};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Enable verbose output
+    #[arg(long, short, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -36,7 +39,7 @@ fn main() {
             out_dir,
             target,
         } => {
-            if let Err(e) = build_file(input, out_dir, target) {
+            if let Err(e) = build_file(input, out_dir, target, cli.verbose) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
@@ -50,7 +53,7 @@ fn main() {
     }
 }
 
-fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn build_file(input: &str, out_dir: &str, _target: &str, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
     let content = fs::read_to_string(input)?;
 
     let mut reporter = Reporter::new();
@@ -60,7 +63,9 @@ fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn s
     let mut lexer = Lexer::new(content, file_id);
     let tokens = lexer.tokenize();
 
-    println!("Tokens: {:?}", tokens);
+    if verbose {
+        println!("Tokens: {:?}", tokens);
+    }
 
     // Parse
     let mut parser = HuskParser::new(tokens);
@@ -128,9 +133,7 @@ fn build_file(input: &str, out_dir: &str, _target: &str) -> Result<(), Box<dyn s
     };
 
     // Ensure output directory exists
-    if let Some(parent) = output_base.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    fs::create_dir_all(&output_base)?;
 
     // Emit JS
     let js_code = emit_js::emit_with_known_variants(&module, &known_variants);
