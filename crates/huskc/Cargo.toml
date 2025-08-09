@@ -14,3 +14,7 @@ emit_dts = { path = "../emit_dts" }
 interop = { path = "../interop" }
 corelib = { path = "../corelib" }
 
+[dev-dependencies]
+tempfile = "3"
+walkdir = "2"
+

@@ -84,6 +84,12 @@ fn build_file(input: &str, out_dir: &str, _target: &str, verbose: bool) -> Resul
     // Create output directory
     fs::create_dir_all(out_dir)?;
 
+    // Add prelude items to make Option/Result available
+    let prelude = corelib::get_prelude_module();
+    for item in prelude.items {
+        module.items.insert(0, item);
+    }
+
     // Name resolution
     let mut resolver = Resolver::new();
     let resolution_diagnostics = resolver.resolve(&module);
@@ -154,4 +160,92 @@ fn build_file(input: &str, out_dir: &str, _target: &str, verbose: bool) -> Resul
 fn check_files(_files: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     println!("Checking files... (not implemented yet)");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_prelude_integration_smoke_test() {
+        // Test that Option/Result are available without local definition via prelude
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        
+        // Create input file at temp dir root to avoid complex path preservation
+        let input_file = temp_dir.path().join("test_prelude.hk");
+        let out_dir = temp_dir.path().join("dist");
+        
+        let source_code = r#"
+// Test prelude types work without local definition
+fn test_option(x: Option) {
+    match x {
+        Some(value) => value,
+        None => "empty"
+    }
+}
+
+fn test_result(x: Result) {
+    match x {
+        Ok(value) => value,
+        Err(msg) => msg
+    }
+}
+
+// Test qualified patterns with prelude types
+fn test_qualified(x: Option) {
+    match x {
+        Option::Some(value) => value,
+        Option::None => "none"
+    }
+}
+        "#;
+
+        fs::write(&input_file, source_code).expect("Failed to write test file");
+
+        // Should compile successfully without errors
+        let result = build_file(
+            input_file.to_str().unwrap(),
+            out_dir.to_str().unwrap(), 
+            "es2020", 
+            false
+        );
+
+        assert!(result.is_ok(), "Prelude integration should allow Option/Result without local definitions");
+
+        // Verify output files were generated (replicate the exact logic from build_file)
+        let input_path = std::path::Path::new(input_file.to_str().unwrap());
+        let file_stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
+        
+        // Replicate the directory preservation logic from build_file
+        let relative_dir = if let Some(parent) = input_path.parent() {
+            if parent != std::path::Path::new("") && parent != std::path::Path::new(".") {
+                Some(parent)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let output_base = if let Some(dir) = relative_dir {
+            out_dir.join(dir)
+        } else {
+            out_dir.clone()
+        };
+        
+        let js_file = output_base.join(format!("{}.js", file_stem));
+        let dts_file = output_base.join(format!("{}.d.ts", file_stem));
+        
+        assert!(js_file.exists(), "JS file should be generated at {:?}", js_file);
+        assert!(dts_file.exists(), "TypeScript declaration file should be generated at {:?}", dts_file);
+
+        // Verify the generated JS contains the prelude types
+        let js_content = fs::read_to_string(&js_file).expect("Failed to read generated JS");
+        assert!(js_content.contains("Option"), "Generated JS should contain Option from prelude");
+        assert!(js_content.contains("Result"), "Generated JS should contain Result from prelude");
+        assert!(js_content.contains("Some"), "Generated JS should contain Some variant");
+        assert!(js_content.contains("None"), "Generated JS should contain None variant");
+    }
 }

@@ -1,115 +1,35 @@
 // Core library prelude for Husk
 // This defines the built-in types that are automatically available
 
+// Simplified prelude that the current parser can handle (no generics yet)
 pub const PRELUDE_SOURCE: &str = r#"
-// Option type - represents a value that might be present or absent
-pub enum Option<T> {
-    Some(T),
+pub enum Option {
+    Some(string),
     None
 }
 
-impl<T> Option<T> {
-    pub fn is_some(self) -> bool {
-        match self {
-            Option::Some(_) => true,
-            Option::None => false,
-        }
-    }
-    
-    pub fn is_none(self) -> bool {
-        match self {
-            Option::Some(_) => false,
-            Option::None => true,
-        }
-    }
-    
-    pub fn unwrap(self) -> T {
-        match self {
-            Option::Some(value) => value,
-            Option::None => panic("called Option::unwrap on None"),
-        }
-    }
-    
-    pub fn map<U>(self, f: fn(T) -> U) -> Option<U> {
-        match self {
-            Option::Some(value) => Option::Some(f(value)),
-            Option::None => Option::None,
-        }
-    }
-}
-
-// Result type - represents either success (Ok) or failure (Err)
-pub enum Result<T, E> {
-    Ok(T),
-    Err(E)
-}
-
-impl<T, E> Result<T, E> {
-    pub fn is_ok(self) -> bool {
-        match self {
-            Result::Ok(_) => true,
-            Result::Err(_) => false,
-        }
-    }
-    
-    pub fn is_err(self) -> bool {
-        match self {
-            Result::Ok(_) => false,
-            Result::Err(_) => true,
-        }
-    }
-    
-    pub fn unwrap(self) -> T {
-        match self {
-            Result::Ok(value) => value,
-            Result::Err(_) => panic("called Result::unwrap on Err"),
-        }
-    }
-    
-    pub fn map<U>(self, f: fn(T) -> U) -> Result<U, E> {
-        match self {
-            Result::Ok(value) => Result::Ok(f(value)),
-            Result::Err(err) => Result::Err(err),
-        }
-    }
-}
-
-// Vec type - dynamic array (maps to JS Array at runtime)
-pub type Vec<T> = Array<T>;
-
-// Map type - key-value mapping (maps to JS Map at runtime)  
-pub type Map<K, V> = JSMap<K, V>;
-
-// String operations
-impl string {
-    pub fn length(self) -> number {
-        // Built-in, handled by emitter
-    }
-    
-    pub fn push(self, other: string) -> string {
-        // Built-in, handled by emitter  
-    }
-}
-
-// Built-in panic function
-pub fn panic(message: string) -> ! {
-    // Built-in, handled by emitter
-}
-
-// Console functions for debugging
-pub mod console {
-    pub fn log(message: string) {
-        // Built-in, handled by emitter
-    }
+pub enum Result {
+    Ok(string), 
+    Err(string)
 }
 "#;
 
 use syntax::ast::*;
 
 pub fn get_prelude_module() -> Module {
-    // For now, return an empty module
-    // In a full implementation, we would parse PRELUDE_SOURCE
-    Module { items: Vec::new() }
+    use syntax::lexer::Lexer;
+    use syntax::parser::Parser;
+    
+    let mut lexer = Lexer::new(PRELUDE_SOURCE.to_string(), 0);
+    let tokens = lexer.tokenize();
+    let mut parser = Parser::new(tokens);
+    let (module, diagnostics) = parser.parse();
+    
+    if !diagnostics.is_empty() {
+        eprintln!("Warning: Prelude parsing errors: {:?}", diagnostics);
+    }
+    
+    module
 }
 
 pub fn is_builtin_type(name: &str) -> bool {
