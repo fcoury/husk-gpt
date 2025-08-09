@@ -148,14 +148,16 @@ impl TypeChecker {
             },
             (Type::Object(fields1), Type::Object(fields2)) => {
                 // Structural compatibility for object types
-                fields1.len() == fields2.len() && 
-                fields1.iter().all(|f1| {
-                    fields2.iter().any(|f2| {
-                        f1.name == f2.name && 
-                        f1.optional == f2.optional &&
-                        self.types_compatible(&f1.field_type, &f2.field_type)
+                // NOTE: This is strict equality-like matching for now.
+                // TODO: Consider relaxing to structural subtyping (source has at least the target's fields).
+                fields1.len() == fields2.len()
+                    && fields1.iter().all(|f1| {
+                        fields2.iter().any(|f2| {
+                            f1.name == f2.name
+                                && f1.optional == f2.optional
+                                && self.types_compatible(&f1.field_type, &f2.field_type)
+                        })
                     })
-                })
             },
             (Type::Union(types1), Type::Union(types2)) => {
                 // Union compatibility - each type in types1 must be compatible with some type in types2
@@ -163,6 +165,19 @@ impl TypeChecker {
                     types2.iter().any(|t2| self.types_compatible(t1, t2))
                 })
             },
+            (Type::Intersection(types1), Type::Intersection(types2)) => {
+                // Both sides must satisfy all constituents
+                types1.iter().all(|t1| types2.iter().any(|t2| self.types_compatible(t1, t2)))
+                    && types2.iter().all(|t2| types1.iter().any(|t1| self.types_compatible(t1, t2)))
+            }
+            (Type::Intersection(types), other) => {
+                // A & B compatible with X iff A compatible with X AND B compatible with X
+                types.iter().all(|t| self.types_compatible(t, other))
+            }
+            (other, Type::Intersection(types)) => {
+                // X compatible with A & B iff X compatible with A AND X compatible with B
+                types.iter().all(|t| self.types_compatible(other, t))
+            }
             (Type::TypeRef { name: n1, args: a1 }, Type::TypeRef { name: n2, args: a2 }) => {
                 n1 == n2 && a1.len() == a2.len() && 
                 a1.iter().zip(a2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))

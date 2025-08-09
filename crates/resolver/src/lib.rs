@@ -88,6 +88,16 @@ enum TypeKind {
 }
 
 impl Resolver {
+    /// Returns true if the arm is effectively unconditional (no guard or guard is `true`).
+    /// Used to determine if an arm fully covers a pattern for duplicate detection.
+    fn arm_is_unconditional(&self, guard: &Option<Expression>) -> bool {
+        match guard {
+            None => true,
+            Some(Expression::Literal(Literal::Bool(true))) => true,
+            _ => false,
+        }
+    }
+
     pub fn new() -> Self {
         let mut resolver = Self {
             scopes: vec![Scope::new()], // Global scope
@@ -237,6 +247,8 @@ impl Resolver {
                             "Variant name '{}' conflicts with existing symbol. Consider using qualified patterns.",
                             variant.name
                         ));
+                        // Skip inserting the bare-variant symbol to avoid cascading errors
+                        // Users can use qualified patterns (Enum::Variant) instead.
                     } else {
                         let bare_variant_symbol = Symbol {
                             name: variant.name.clone(),
@@ -785,6 +797,31 @@ impl Resolver {
 
     /// Analyze match expression for exhaustiveness and reachability
     fn analyze_match(&mut self, match_expr: &MatchExpression, span: Span) {
+        // Prefer enum-aware analysis if we can detect the enum context.
+        if let Some(enum_ctx) = self.detect_enum_context(&match_expr.arms) {
+            let analysis = self.check_enum_match_exhaustiveness(&match_expr.arms, &enum_ctx, span);
+            if !analysis.missing_patterns.is_empty() {
+                let missing_str = analysis
+                    .missing_patterns
+                    .iter()
+                    .map(|p| self.constructor_pattern_to_string(p))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error_at(
+                    span,
+                    format!("Non-exhaustive match: missing variants [{}]", missing_str),
+                );
+            }
+            for &arm_index in &analysis.unreachable_patterns {
+                self.error_at(
+                    span,
+                    format!("Unreachable pattern at match arm {}", arm_index + 1),
+                );
+            }
+            return;
+        }
+
+        // Fallback: generic constructor coverage (pre-existing behavior).
         let analysis = self.check_match_exhaustiveness(&match_expr.arms, span);
 
         // Report missing patterns (exhaustiveness)
@@ -838,6 +875,149 @@ impl Resolver {
 
         // Check for missing patterns (exhaustiveness) using all patterns
         let missing_patterns = self.find_missing_patterns(&covered_for_exhaustiveness);
+
+        MatchAnalysis {
+            missing_patterns,
+            unreachable_patterns,
+        }
+    }
+
+    /// Try to detect the enum context for a match from its arms.
+    /// Returns (enum_name, set of variant names) if confidently determined.
+    fn detect_enum_context(&self, arms: &[MatchArm]) -> Option<(String, HashSet<String>)> {
+        // Candidate enum name if any arm uses a qualified variant.
+        let mut candidate_enum: Option<String> = None;
+
+        // Helper to add all variants for a given enum name from the symbol table.
+        let load_variants = |enum_name: &str| -> Option<HashSet<String>> {
+            if let Some(Symbol { kind: SymbolKind::Type { kind: TypeKind::Enum(variants) }, .. }) =
+                self.lookup_symbol(enum_name)
+            {
+                let set = variants.iter().map(|v| v.name.clone()).collect::<HashSet<_>>();
+                Some(set)
+            } else {
+                None
+            }
+        };
+
+        // First pass: if any qualified pattern exists, use its enum_name.
+        for arm in arms {
+            if let Pattern::QualifiedVariant { enum_name, .. } = &arm.pattern {
+                candidate_enum = Some(enum_name.clone());
+                break;
+            }
+        }
+
+        // If still unknown, look for unqualified Variant/Identifier that maps to a known EnumVariant.
+        if candidate_enum.is_none() {
+            for arm in arms {
+                match &arm.pattern {
+                    Pattern::Variant(name, _) | Pattern::Identifier(name) => {
+                        if let Some(Symbol { kind: SymbolKind::EnumVariant { enum_name, .. }, .. }) =
+                            self.lookup_symbol(name)
+                        {
+                            candidate_enum = Some(enum_name.clone());
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let enum_name = candidate_enum?;
+        let all_variants = load_variants(&enum_name)?;
+        if all_variants.is_empty() {
+            return None;
+        }
+        Some((enum_name, all_variants))
+    }
+
+    /// Enum-aware exhaustiveness + reachability analysis.
+    /// - Exhaustiveness: all variants must be covered unless a wildcard `_` exists.
+    /// - Guards still count towards exhaustiveness (conservative).
+    /// - Reachability: once covered by `_` or by a previously matched constructor, later arms are unreachable.
+    fn check_enum_match_exhaustiveness(
+        &self,
+        arms: &[MatchArm],
+        enum_ctx: &(String, HashSet<String>),
+        _span: Span,
+    ) -> MatchAnalysis {
+        let (_enum_name, all_variants) = enum_ctx;
+        let mut remaining = all_variants.clone();
+        let mut unreachable_patterns = Vec::new();
+        let mut saw_wildcard = false;
+        // Variants already covered by an earlier UNGUARDED arm.
+        let mut seen_unguarded: HashSet<String> = HashSet::new();
+
+        // Track coverage for reachability: once wildcard is seen, all later arms are unreachable.
+        for (i, arm) in arms.iter().enumerate() {
+            if saw_wildcard {
+                unreachable_patterns.push(i);
+                continue;
+            }
+
+            match &arm.pattern {
+                Pattern::Wildcard => {
+                    saw_wildcard = true;
+                    // Wildcard suppresses missing variants.
+                }
+                Pattern::QualifiedVariant { variant, .. } => {
+                    // Check for duplicate/unreachable patterns
+                    if self.arm_is_unconditional(&arm.guard) {
+                        if !seen_unguarded.insert(variant.clone()) {
+                            unreachable_patterns.push(i);
+                        }
+                    } else if seen_unguarded.contains(variant) {
+                        // Earlier unconditional arm already captures; this guarded arm is unreachable.
+                        unreachable_patterns.push(i);
+                    }
+                    remaining.remove(variant);
+                }
+                Pattern::Variant(name, _) => {
+                    // Unqualified variant – it must resolve to an EnumVariant of this enum to count.
+                    if let Some(Symbol { kind: SymbolKind::EnumVariant { enum_name, .. }, .. }) =
+                        self.lookup_symbol(name)
+                    {
+                        if all_variants.contains(name) && enum_name == _enum_name {
+                            if self.arm_is_unconditional(&arm.guard) {
+                                if !seen_unguarded.insert(name.clone()) {
+                                    unreachable_patterns.push(i);
+                                }
+                            } else if seen_unguarded.contains(name) {
+                                unreachable_patterns.push(i);
+                            }
+                            remaining.remove(name);
+                        }
+                    }
+                }
+                Pattern::Identifier(name) => {
+                    // Treat identifier as unit-variant only if it is one.
+                    if self.is_unit_variant(name) && all_variants.contains(name) {
+                        if self.arm_is_unconditional(&arm.guard) {
+                            if !seen_unguarded.insert(name.clone()) {
+                                unreachable_patterns.push(i);
+                            }
+                        } else if seen_unguarded.contains(name) {
+                            unreachable_patterns.push(i);
+                        }
+                        remaining.remove(name);
+                    }
+                }
+                _ => {
+                    // Tuple/literal/etc. do not contribute to enum variant coverage.
+                }
+            }
+        }
+
+        let missing_patterns = if saw_wildcard {
+            vec![] // wildcard means exhaustive
+        } else {
+            remaining
+                .into_iter()
+                .map(|v| ConstructorPattern::Variant { name: v, arity: 0 })
+                .collect()
+        };
 
         MatchAnalysis {
             missing_patterns,
@@ -1117,7 +1297,7 @@ impl Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syntax::{Lexer, Parser as HuskParser};
+    use syntax::{lexer::Lexer, parser::Parser as HuskParser};
 
     fn parse_and_resolve(input: &str) -> (Module, Vec<Diagnostic>) {
         let mut lexer = Lexer::new(input.to_string(), 0);
@@ -1291,5 +1471,123 @@ mod tests {
             "Should resolve function parameters: {:?}",
             diagnostics
         );
+    }
+
+    // --- Exhaustiveness analysis tests ---
+    fn parse_module(src: &str) -> Module {
+        let mut lexer = Lexer::new(src.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = HuskParser::new(tokens);
+        let (module, diagnostics) = parser.parse();
+        if !diagnostics.is_empty() {
+            panic!("Parse errors: {:?}", diagnostics);
+        }
+        module
+    }
+
+    fn resolve_and_collect(src: &str) -> Vec<Diagnostic> {
+        let module = parse_module(src);
+        let mut resolver = Resolver::new();
+        resolver.resolve(&module)
+    }
+
+    #[test]
+    fn exhaustiveness_reports_missing_variants() {
+        let src = r#"
+            enum E { A, B, C }
+            fn f(x: E) {
+                match x {
+                    A => 1,
+                    B => 2
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(msg.contains("Non-exhaustive match"), "Expected non-exhaustive error, got:\n{msg}");
+        assert!(msg.contains("missing variants [C]") || msg.contains("missing variants [ C ]"), "Missing variants list should include C");
+    }
+
+    #[test]
+    fn wildcard_eliminates_missing_variants() {
+        let src = r#"
+            enum E { A, B, C }
+            fn f(x: E) {
+                match x {
+                    A => 1,
+                    _ => 0
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(!msg.contains("Non-exhaustive match"), "Wildcard should make match exhaustive, got:\n{msg}");
+    }
+
+    #[test]
+    fn arm_after_wildcard_is_unreachable() {
+        let src = r#"
+            enum E { A, B }
+            fn f(x: E) {
+                match x {
+                    _ => 0,
+                    A => 1
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(msg.contains("Unreachable pattern at match arm 2"), "Expected unreachable arm diagnostic, got:\n{msg}");
+    }
+
+    #[test]
+    fn qualified_variants_drive_context() {
+        let src = r#"
+            enum E { A, B }
+            fn f(x: E) {
+                match x {
+                    E::A => 1
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(msg.contains("Non-exhaustive match"), "Qualified variant should trigger enum context and missing variant B");
+        assert!(msg.contains("missing variants [B]") || msg.contains("missing variants [ B ]"));
+    }
+
+    #[test]
+    fn duplicate_variant_after_unguarded_is_unreachable() {
+        let src = r#"
+            enum E { A, B }
+            fn f(x: E) {
+                match x {
+                    A => 1,
+                    A => 2,
+                    B => 3
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(msg.contains("Unreachable pattern at match arm 2"), "Second A arm should be unreachable:\n{msg}");
+    }
+
+    #[test]
+    fn duplicate_with_explicit_true_guard_still_unreachable() {
+        // Mirrors pipelines that normalize to `if true` on every arm.
+        let src = r#"
+            enum E { A, B }
+            fn f(x: E) {
+                match x {
+                    A if true => 1,
+                    A => 2,
+                    B => 3
+                }
+            }
+        "#;
+        let diags = resolve_and_collect(src);
+        let msg = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
+        assert!(msg.contains("Unreachable pattern at match arm 2"), "Second A should still be unreachable when the first is `if true`:\n{msg}");
     }
 }
