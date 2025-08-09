@@ -205,15 +205,27 @@ fn emit_type(ty: &Type) -> String {
             format!("{}[]", emit_type(element_type))
         }
         Type::Tuple(types) => {
-            // Generate object type to match JavaScript object representation: {0: type1, 1: type2}
+            // Generate exact object type to match JavaScript object representation
             // This ensures consistency with how tuples are represented at runtime
-            let types_str = types
-                .iter()
-                .enumerate()
-                .map(|(i, ty)| format!("{}: {}", i, emit_type(ty)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{{{}}}", types_str)
+            if types.is_empty() {
+                // Empty tuple: {} & Record<number, never>
+                "({} & Record<number, never>)".to_string()
+            } else {
+                let types_str = types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ty)| format!("{}: {}", i, emit_type(ty)))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                
+                // Generate excluded indices: 0 | 1 | 2 | ...
+                let excluded_indices = (0..types.len())
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                
+                format!("({{ {} }} & Record<Exclude<number, {}>, never>)", types_str, excluded_indices)
+            }
         }
         Type::Option(inner) => {
             format!("{} | undefined", emit_type(inner))
@@ -432,13 +444,13 @@ mod tests {
         let module = parse_husk_code(input);
         let output = emit(&module);
 
-        // Verify tuple type is emitted as object type {0: type1, 1: type2}
-        // This matches the JavaScript runtime representation
-        if output.contains("{0: string, 1: number}") {
-            // Success - object representation
-        } else {
-            panic!("Expected tuple as object type, got: {}", output);
-        }
+        // Verify tuple type is emitted as exact object type with Record exclusion
+        // This matches the JavaScript runtime representation and prevents extra properties
+        assert!(output.contains("({ 0: string; 1: number } & Record<Exclude<number, 0 | 1>, never>)"), 
+                "Expected exact tuple object type, got: {}", output);
+        
+        // Ensure no array syntax is used
+        assert!(!output.contains("[string, number]"), "Should not use array syntax for tuples");
     }
 
     #[test]
@@ -450,8 +462,15 @@ mod tests {
         let module = parse_husk_code(input);
         let output = emit(&module);
 
-        // Verify nested tuples are correctly represented as objects
-        assert!(output.contains("(data: {0: {0: string, 1: number}, 1: boolean})"));
+        // Verify nested tuples are correctly represented as exact object types
+        let expected_inner_tuple = "({ 0: string; 1: number } & Record<Exclude<number, 0 | 1>, never>)";
+        let expected_outer_tuple = format!("({{ 0: {}; 1: boolean }} & Record<Exclude<number, 0 | 1>, never>)", expected_inner_tuple);
+        
+        assert!(output.contains(&expected_outer_tuple), 
+               "Expected nested exact tuple types, got: {}", output);
+        
+        // Ensure no array syntax is used
+        assert!(!output.contains("[[string, number], boolean]"), "Should not use array syntax for tuples");
     }
 
     #[test]
@@ -476,5 +495,87 @@ export { Status }"#;
         // Verify the enum is still properly exported via public visibility
         assert!(output.contains("export type Status ="));
         assert!(output.contains("export declare const Status:"));
+    }
+
+    #[test]
+    fn test_empty_tuple_exact_type() {
+        let input = r#"pub fn empty_tuple(data: ()) -> string {
+    "empty"
+}"#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Empty tuple should be exact empty object
+        assert!(output.contains("(data: ({} & Record<number, never>))"), 
+               "Expected exact empty tuple type, got: {}", output);
+        
+        // Ensure no array syntax is used
+        assert!(!output.contains("[]"), "Should not use array syntax for empty tuple");
+    }
+
+    #[test]
+    fn test_single_element_tuple_exact_type() {
+        // NOTE: (string) is parsed as just string, not a tuple
+        // This test verifies that if we ever do support single-element tuples, they work correctly
+        // For now, we'll skip this test and focus on multi-element tuples
+        
+        // Skipping single element tuple test as (string) is parsed as string, not Tuple([string])
+        // This is actually reasonable parser behavior
+    }
+
+    #[test]
+    fn test_two_element_tuple_exact_type() {
+        let input = r#"pub fn pair_tuple(data: (string, number)) -> string {
+    "pair"
+}"#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Two element tuple should have indices 0 and 1
+        assert!(output.contains("({ 0: string; 1: number } & Record<Exclude<number, 0 | 1>, never>)"), 
+               "Expected exact two element tuple type, got: {}", output);
+        
+        // Ensure no array syntax is used
+        assert!(!output.contains("[string, number]"), "Should not use array syntax for two element tuple");
+    }
+
+    #[test]
+    fn test_mixed_tuple_function_signature() {
+        let input = r#"pub fn process_coordinates(input: (number, number), label: string) -> (string, number) {
+    // Return implementation doesn't matter for DTS test
+    input
+}"#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Both parameter and return types should use exact tuple syntax
+        let input_tuple = "({ 0: number; 1: number } & Record<Exclude<number, 0 | 1>, never>)";
+        let return_tuple = "({ 0: string; 1: number } & Record<Exclude<number, 0 | 1>, never>)";
+        
+        assert!(output.contains(&format!("input: {}", input_tuple)), 
+               "Expected exact tuple type in parameter, got: {}", output);
+        assert!(output.contains(&format!("): {}", return_tuple)), 
+               "Expected exact tuple type in return, got: {}", output);
+        
+        // Ensure no array syntax anywhere
+        assert!(!output.contains("[number, number]"), "Should not use array syntax in parameters");
+        assert!(!output.contains("[string, number]"), "Should not use array syntax in return type");
+    }
+
+    #[test]
+    fn test_three_element_tuple_indices() {
+        let input = r#"pub fn triple(data: (string, number, boolean)) -> boolean {
+    true
+}"#;
+
+        let module = parse_husk_code(input);
+        let output = emit(&module);
+
+        // Three element tuple should exclude indices 0, 1, and 2
+        assert!(output.contains("({ 0: string; 1: number; 2: boolean } & Record<Exclude<number, 0 | 1 | 2>, never>)"), 
+               "Expected exact three element tuple type, got: {}", output);
     }
 }
