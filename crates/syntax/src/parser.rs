@@ -751,8 +751,54 @@ impl Parser {
                 let name = name.clone();
                 self.advance();
 
-                // Check if it's a variant pattern
-                if self.check(&Token::LeftParen) {
+                // Check if it's a qualified variant pattern (Enum::Variant)
+                if self.check(&Token::DoubleColon) {
+                    self.advance(); // consume '::'
+                    
+                    if let Token::Ident(variant_name) = &self.peek()?.value {
+                        let variant_name = variant_name.clone();
+                        self.advance();
+                        
+                        // Check for optional tuple patterns
+                        if self.check(&Token::LeftParen) {
+                            self.advance(); // consume '('
+                            let mut patterns = Vec::new();
+
+                            if !self.check(&Token::RightParen) {
+                                loop {
+                                    if let Some(pattern) = self.parse_pattern() {
+                                        patterns.push(pattern);
+                                    } else {
+                                        break;
+                                    }
+
+                                    if !self.match_token(&Token::Comma) {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            self.consume(&Token::RightParen, "Expected ')' after qualified variant patterns")?;
+                            Some(Pattern::QualifiedVariant {
+                                enum_name: name,
+                                variant: variant_name,
+                                patterns,
+                            })
+                        } else {
+                            // Qualified variant without tuple patterns
+                            Some(Pattern::QualifiedVariant {
+                                enum_name: name,
+                                variant: variant_name,
+                                patterns: Vec::new(),
+                            })
+                        }
+                    } else {
+                        self.error("Expected variant name after '::'");
+                        None
+                    }
+                }
+                // Check if it's an unqualified variant pattern
+                else if self.check(&Token::LeftParen) {
                     self.advance(); // consume '('
                     let mut patterns = Vec::new();
 
@@ -1294,5 +1340,56 @@ impl Parser {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod qualified_pattern_tests {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    #[test]
+    fn test_parse_qualified_variant_pattern() {
+        let source = "fn test() { match result { Status::Active => 1, Status::Inactive(reason) => 2 } }";
+        let mut lexer = Lexer::new(source.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = Parser::new(tokens);
+        
+        // This should parse without errors
+        let (module, diagnostics) = parser.parse();
+        assert!(diagnostics.is_empty(), "Expected no parse errors, got: {:?}", diagnostics);
+        
+        // Check that we have a function with qualified patterns
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(func) = &module.items[0].value {
+            assert_eq!(func.name, "test");
+            // More detailed AST validation could be added here
+        } else {
+            panic!("Expected a function item");
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_qualified_unqualified_patterns() {
+        let source = "fn test() { match value { Status::Active => 1, Inactive => 2, Status::Unknown(msg) => 3 } }";
+        let mut lexer = Lexer::new(source.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = Parser::new(tokens);
+        
+        // This should parse without errors - mixing qualified and unqualified is allowed
+        let (module, diagnostics) = parser.parse();
+        assert!(diagnostics.is_empty(), "Expected no parse errors, got: {:?}", diagnostics);
+    }
+
+    #[test]
+    fn test_parse_nested_qualified_patterns() {
+        let source = "fn test() { match result { Result::Ok(Option::Some(value)) => value, Result::Err(msg) => msg } }";
+        let mut lexer = Lexer::new(source.to_string(), 0);
+        let tokens = lexer.tokenize();
+        let mut parser = Parser::new(tokens);
+        
+        // This should parse without errors
+        let (module, diagnostics) = parser.parse();
+        assert!(diagnostics.is_empty(), "Expected no parse errors, got: {:?}", diagnostics);
     }
 }

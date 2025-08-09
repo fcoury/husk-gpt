@@ -244,6 +244,11 @@ pub enum Pattern {
     Literal(Literal),
     Tuple(Vec<Pattern>),
     Variant(String, Vec<Pattern>),
+    QualifiedVariant {
+        enum_name: String,
+        variant: String,
+        patterns: Vec<Pattern>,
+    },
     Wildcard,
 }
 
