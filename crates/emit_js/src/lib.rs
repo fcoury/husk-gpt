@@ -64,15 +64,57 @@ impl PatternCheck {
                     vec![format!("{}.tag === \"{}\"", scrutinee_var, variant_name)];
                 let mut bindings = Vec::new();
 
-                // Add arity check for non-empty variant patterns
+                // Add exact arity check for non-empty variant patterns
                 if !patterns.is_empty() {
-                    // For variants, we expect properties 0, 1, 2... to exist
-                    // This is a basic arity check - could be more sophisticated
-                    test_conditions.push(format!(
-                        "typeof {}[{}] !== 'undefined'",
-                        scrutinee_var,
-                        patterns.len() - 1
-                    ));
+                    // For variants, we need exact structural validation:
+                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
+                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    let expected_indices: Vec<String> = (0..patterns.len())
+                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .collect();
+                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
+                }
+
+                // Handle nested patterns recursively
+                for (i, pattern) in patterns.iter().enumerate() {
+                    let field_expr = format!("{}[{}]", scrutinee_var, i);
+                    let nested_check =
+                        PatternCheck::from_pattern(pattern, &field_expr, known_variants);
+
+                    // Combine test conditions with &&
+                    if nested_check.test_condition != "true" {
+                        test_conditions.push(nested_check.test_condition);
+                    }
+
+                    // Add all bindings from nested patterns
+                    bindings.extend(nested_check.bindings);
+                }
+
+                PatternCheck {
+                    test_condition: test_conditions.join(" && "),
+                    bindings,
+                }
+            }
+            Pattern::QualifiedVariant {
+                variant, patterns, ..
+            } => {
+                // QualifiedVariant patterns work exactly the same as Variant patterns at runtime
+                // The difference is just in how they're resolved by the compiler
+                let mut test_conditions =
+                    vec![format!("{}.tag === \"{}\"", scrutinee_var, variant)];
+                let mut bindings = Vec::new();
+
+                // Add exact arity check for non-empty variant patterns
+                if !patterns.is_empty() {
+                    // For variants, we need exact structural validation:
+                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
+                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    let expected_indices: Vec<String> = (0..patterns.len())
+                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .collect();
+                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
                 }
 
                 // Handle nested patterns recursively
@@ -105,13 +147,16 @@ impl PatternCheck {
                     scrutinee_var, scrutinee_var, scrutinee_var
                 ));
 
-                // Check that the highest index field exists (basic arity check)
+                // Add exact arity check for tuples
                 if !patterns.is_empty() {
-                    test_conditions.push(format!(
-                        "typeof {}[{}] !== 'undefined'",
-                        scrutinee_var,
-                        patterns.len() - 1
-                    ));
+                    // For tuples, we need exact structural validation:
+                    // - All expected indices must exist: 0 in obj && 1 in obj && ...
+                    // - Next index must NOT exist: !(patterns.len() in obj)
+                    let expected_indices: Vec<String> = (0..patterns.len())
+                        .map(|i| format!("{} in {}", i, scrutinee_var))
+                        .collect();
+                    let no_extra_check = format!("!({} in {})", patterns.len(), scrutinee_var);
+                    test_conditions.push(format!("({}) && {}", expected_indices.join(" && "), no_extra_check));
                 }
 
                 // Handle nested patterns recursively
@@ -447,6 +492,7 @@ fn emit_match_expression(match_expr: &MatchExpression, known_variants: &HashSet<
     // Check if all patterns are variant patterns (including unit variants like Inactive)
     let all_variant_patterns = arms.iter().all(|arm| match &arm.pattern {
         Pattern::Variant(_, _) => true,
+        Pattern::QualifiedVariant { .. } => true,
         Pattern::Identifier(name) => known_variants.contains(name),
         _ => false,
     });
@@ -457,6 +503,7 @@ fn emit_match_expression(match_expr: &MatchExpression, known_variants: &HashSet<
     // Check if any patterns have nested structure that requires complex conditions
     let has_nested_patterns = arms.iter().any(|arm| match &arm.pattern {
         Pattern::Variant(_, patterns) => !patterns.is_empty(),
+        Pattern::QualifiedVariant { patterns, .. } => !patterns.is_empty(),
         _ => false,
     });
 
@@ -481,6 +528,27 @@ fn emit_variant_switch_match(
         match &arm.pattern {
             Pattern::Variant(variant_name, _) => {
                 output.push_str(&format!("    case \"{}\":\n", variant_name));
+                let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s", known_variants);
+                for binding in &pattern_check.bindings {
+                    output.push_str(&format!(
+                        "      const {} = {};\n",
+                        binding.name, binding.value_expr
+                    ));
+                }
+                if let Some(ref guard) = arm.guard {
+                    output.push_str(&format!(
+                        "      if (!({}) ) break;\n",
+                        emit_expression(guard, known_variants)
+                    ));
+                }
+                output.push_str(&format!(
+                    "      return {};\n",
+                    emit_expression(&arm.body, known_variants)
+                ));
+            }
+            Pattern::QualifiedVariant { variant, .. } => {
+                // QualifiedVariant patterns work the same as Variant at runtime - use variant name for case
+                output.push_str(&format!("    case \"{}\":\n", variant));
                 let pattern_check = PatternCheck::from_pattern(&arm.pattern, "_s", known_variants);
                 for binding in &pattern_check.bindings {
                     output.push_str(&format!(
